@@ -1,7 +1,7 @@
 """
-Login with a one-time code sent to the work email, sessions, and who may see what.
+Login with username and password (stored in the users table), sessions, and who may see what.
 
-Single-user system: only the owner (ADMIN_EMAILS in .env, or an employee marked admin) can log in.
+Single-user system: the demo account (admin / admin123) belongs to the administrator.
 The owner is the PM and can do everything. Other employees are only meeting participants.
 """
 import hashlib
@@ -16,18 +16,17 @@ from . import db
 
 SESSION_COOKIE = "ma_session"
 SESSION_DAYS = 365  # log in once
-CODE_MINUTES = 10
-CODE_MAX_ATTEMPTS = 5
-CODES_PER_HOUR = 5
+
+# Demo account created on first start (thesis project: no email codes, just username + password)
+DEFAULT_USERNAME = "admin"
+DEFAULT_PASSWORD = "admin123"
 
 SCHEMA = """
-CREATE TABLE IF NOT EXISTS login_codes (
+CREATE TABLE IF NOT EXISTS users (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    email TEXT NOT NULL,
-    code_hash TEXT NOT NULL,
-    expires_at TEXT NOT NULL,
-    attempts INTEGER NOT NULL DEFAULT 0,
-    used INTEGER NOT NULL DEFAULT 0,
+    username TEXT NOT NULL UNIQUE COLLATE NOCASE,
+    password_hash TEXT NOT NULL,
+    employee_id INTEGER NOT NULL REFERENCES employees(id) ON DELETE CASCADE,
     created_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS sessions (
@@ -36,6 +35,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     created_at TEXT NOT NULL,
     expires_at TEXT NOT NULL
 );
+DROP TABLE IF EXISTS login_codes;
 """
 
 
@@ -43,11 +43,13 @@ def init():
     with db.connect() as c:
         c.executescript(SCHEMA)
         c.execute("DELETE FROM sessions WHERE expires_at < ?", (db.now(),))
-        c.execute("DELETE FROM login_codes WHERE expires_at < ?", (db.now(),))
+        if not c.execute("SELECT 1 FROM users LIMIT 1").fetchone():
+            _create_user(c, DEFAULT_USERNAME, DEFAULT_PASSWORD, _admin_employee_id(c))
+            print(f"Created the demo login: username '{DEFAULT_USERNAME}', password '{DEFAULT_PASSWORD}'")
 
 
 def _secret():
-    # Codes and tokens are stored only as keyed hashes
+    # Session tokens are stored only as keyed hashes
     return (os.environ.get("APP_SECRET") or "change-me-in-env").encode()
 
 
@@ -55,12 +57,23 @@ def _hash(value):
     return hmac.new(_secret(), value.encode(), hashlib.sha256).hexdigest()
 
 
+def hash_password(password, salt=None):
+    salt = salt or secrets.token_hex(16)
+    digest = hashlib.pbkdf2_hmac("sha256", password.encode(), salt.encode(), 200_000).hex()
+    return f"{salt}${digest}"
+
+
+def check_password(password, stored):
+    salt, _, _digest = (stored or "").partition("$")
+    return bool(salt) and hmac.compare_digest(hash_password(password, salt), stored)
+
+
 def admin_emails():
     return {e.strip().lower() for e in (os.environ.get("ADMIN_EMAILS") or "").split(",") if e.strip()}
 
 
 def allowed_domain(email):
-    """If ALLOWED_EMAIL_DOMAINS is set (e.g. company.com), only those domains may log in."""
+    """If ALLOWED_EMAIL_DOMAINS is set (e.g. company.com), only those domains are accepted."""
     domains = {d.strip().lower().lstrip("@") for d in (os.environ.get("ALLOWED_EMAIL_DOMAINS") or "").split(",") if d.strip()}
     return not domains or email.rsplit("@", 1)[-1] in domains
 
@@ -74,59 +87,35 @@ def _employee_by_email(c, email):
     return dict(r) if r else None
 
 
-# ---------- Codes ----------
-
-def request_code(email):
-    """Return (employee, code) when a code should be sent, else (None, None).
-    The caller always answers the same way, so nobody can probe which emails exist."""
-    email = (email or "").strip().lower()
-    if "@" not in email or not allowed_domain(email):
-        return None, None
-    with db.connect() as c:
-        emp = _employee_by_email(c, email)
-        if not emp and email in admin_emails():
-            # First login of an admin listed in .env: create the record
-            emp_id = c.execute("INSERT INTO employees (full_name, email, active, is_admin, created_at) VALUES (?,?,1,1,?)",
-                               (email.split("@")[0].replace(".", " ").title(), email, db.now())).lastrowid
-            emp = dict(c.execute("SELECT * FROM employees WHERE id = ?", (emp_id,)).fetchone())
-        if not emp or not is_owner(emp):
-            return None, None  # participants cannot log in
-        hour_ago = (datetime.now() - timedelta(hours=1)).isoformat(timespec="seconds")
-        recent = c.execute("SELECT COUNT(*) FROM login_codes WHERE email = ? AND created_at > ?", (email, hour_ago)).fetchone()[0]
-        if recent >= CODES_PER_HOUR:
-            raise HTTPException(429, "Too many code requests. Try again in a little while.")
-        code = f"{secrets.randbelow(1_000_000):06d}"
-        c.execute("UPDATE login_codes SET used = 1 WHERE email = ?", (email,))  # only the newest code works
-        c.execute("INSERT INTO login_codes (email, code_hash, expires_at, created_at) VALUES (?,?,?,?)",
-                  (email, _hash(f"{email}:{code}"),
-                   (datetime.now() + timedelta(minutes=CODE_MINUTES)).isoformat(timespec="seconds"), db.now()))
-    return emp, code
+def _admin_employee_id(c):
+    """The first active administrator, or a new "Admin" employee."""
+    r = c.execute("SELECT id FROM employees WHERE is_admin = 1 AND active = 1 ORDER BY id LIMIT 1").fetchone()
+    if r:
+        return r[0]
+    return c.execute("INSERT INTO employees (full_name, email, active, is_admin, created_at) VALUES (?,?,1,1,?)",
+                     ("Admin", "admin@example.com", db.now())).lastrowid
 
 
-def verify_code(email, code):
+def _create_user(c, username, password, employee_id):
+    c.execute("INSERT INTO users (username, password_hash, employee_id, created_at) VALUES (?,?,?,?)",
+              (username, hash_password(password), employee_id, db.now()))
+
+
+# ---------- Login ----------
+
+def login(username, password):
     """Return a new session token, or raise 400."""
-    email = (email or "").strip().lower()
-    code = "".join(ch for ch in (code or "") if ch.isdigit())
+    username = (username or "").strip()
     with db.connect() as c:
-        row = c.execute("SELECT * FROM login_codes WHERE email = ? AND used = 0 AND expires_at > ? "
-                        "ORDER BY id DESC LIMIT 1", (email, db.now())).fetchone()
-        if not row:
-            raise HTTPException(400, "The code has expired or doesn’t exist. Request a new one.")
-        if row["attempts"] >= CODE_MAX_ATTEMPTS:
-            raise HTTPException(400, "Too many wrong attempts. Request a new code.")
-        if not hmac.compare_digest(row["code_hash"], _hash(f"{email}:{code}")):
-            c.execute("UPDATE login_codes SET attempts = attempts + 1 WHERE id = ?", (row["id"],))
-            c.commit()  # keep the failed attempt even though we raise (limits guessing)
-            raise HTTPException(400, "The code is not correct.")
-        c.execute("UPDATE login_codes SET used = 1 WHERE id = ?", (row["id"],))
-        emp = _employee_by_email(c, email)
-        if not emp or not is_owner(emp):
-            raise HTTPException(400, "This account has no access to the system.")
-        if email in admin_emails() and not emp["is_admin"]:
-            c.execute("UPDATE employees SET is_admin = 1 WHERE id = ?", (emp["id"],))
+        row = c.execute("""
+            SELECT u.password_hash, e.* FROM users u JOIN employees e ON e.id = u.employee_id
+            WHERE u.username = ? AND e.active = 1
+        """, (username,)).fetchone()
+        if not row or not check_password(password or "", row["password_hash"]):
+            raise HTTPException(400, "Wrong username or password.")
         token = secrets.token_urlsafe(32)
         c.execute("INSERT INTO sessions (token_hash, employee_id, created_at, expires_at) VALUES (?,?,?,?)",
-                  (_hash(token), emp["id"], db.now(),
+                  (_hash(token), row["id"], db.now(),
                    (datetime.now() + timedelta(days=SESSION_DAYS)).isoformat(timespec="seconds")))
     return token
 
@@ -147,9 +136,10 @@ def user_from_token(token):
             SELECT e.* FROM sessions s JOIN employees e ON e.id = s.employee_id
             WHERE s.token_hash = ? AND s.expires_at > ? AND e.active = 1
         """, (_hash(token), db.now())).fetchone()
-        if not r or not is_owner(r):
+        if not r:
             return None
         user = _build_user(c, dict(r))
+        user["is_admin"] = True
     user["role"] = "pm"
     return user
 
@@ -197,7 +187,7 @@ def current_user(request: Request):
         return _local_admin()
     user = user_from_token(request.cookies.get(SESSION_COOKIE))
     if not user:
-        raise HTTPException(401, "Sign in with your work email.")
+        raise HTTPException(401, "Please sign in.")
     return user
 
 

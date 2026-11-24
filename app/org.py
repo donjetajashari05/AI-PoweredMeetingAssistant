@@ -65,7 +65,7 @@ MIGRATIONS = {
         "jira_error": "TEXT",
         "approved_at": "TEXT",   # NULL = untouched AI draft; set when the PM edits it (kept by "Analyze again")
         # Ticket review (page "Tickets"): the PM decides who gets the ticket and where it goes
-        "assignee_email": "TEXT",  # recipient's work email; NULL = the linked employee's email
+        "assignee_email": "TEXT",  # recipient's email; NULL = the linked employee's email
         "details": "TEXT",         # extra description for the Jira ticket
         "jira_project": "TEXT",    # Jira project key for this ticket; NULL = the project's key
         "sent_at": "TEXT",

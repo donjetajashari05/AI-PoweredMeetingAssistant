@@ -71,7 +71,7 @@ def _comment(task, action):
     lines = [f"{verb} in the meeting “{task['meeting_title']}” ({task['meeting_date']})."]
     if task.get("quote"):
         lines.append(f"Said: “{task['quote']}”")
-    lines.append(f"Meeting Memory: {link}")
+    lines.append(f"Meeting Assistant: {link}")
     return "\n\n".join(lines)
 
 

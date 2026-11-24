@@ -1,5 +1,5 @@
 """
-Meeting Memory — web app.
+Meeting Assistant — web app.
 
 Run (from the project root, with the venv active):
     python -m app
@@ -50,52 +50,25 @@ async def lifespan(_app):
     memory.start_sync()
     if not os.environ.get("APP_SECRET"):
         print("WARNING: set APP_SECRET in .env (a long random string).")
-    if not auth.admin_emails():
-        print("WARNING: set ADMIN_EMAILS in .env so you can sign in as administrator.")
     yield
 
 
-app = FastAPI(title="Meeting Memory", lifespan=lifespan)
+app = FastAPI(title="Meeting Assistant", lifespan=lifespan)
 User = Depends(auth.current_user)
 
 
 # ---------- Login ----------
 
-class EmailIn(BaseModel):
-    email: str
+class LoginIn(BaseModel):
+    username: str
+    password: str
 
 
-class CodeIn(BaseModel):
-    email: str
-    code: str
-
-
-@app.post("/api/auth/request")
-def auth_request(body: EmailIn):
+@app.post("/api/auth/login")
+def auth_login(body: LoginIn, response: Response, request: Request):
     if auth.login_disabled():
         raise HTTPException(404, "Sign-in is disabled: the system has a single user.")
-    emp, code = auth.request_code(body.email)
-    if emp:
-        status = mailer.send(emp["email"], f"Your sign-in code: {code}",
-                             f"Hi {emp['full_name'].split()[0]},\n\nYour code for Meeting Memory is: {code}\n\n"
-                             f"The code is valid for {auth.CODE_MINUTES} minutes. If you didn’t request it, ignore this email.",
-                             kind="login")
-        if status == "dry-run":
-            # No SMTP yet: show the code only in the server's own terminal
-            print(f"\n[SMTP not configured] Sign-in code for {emp['email']}: {code}\n", flush=True)
-            # Mock mode (no SMTP): hand the code to the login page instead of a real email
-            return {"ok": True, "message": "Email is not configured: the code was filled in automatically.", "dev_code": code}
-        elif status == "failed":
-            raise HTTPException(502, "The email with the code could not be sent. Check the SMTP settings in .env.")
-    # Same answer whether the email exists or not
-    return {"ok": True, "message": "If the email is registered, the code was sent."}
-
-
-@app.post("/api/auth/verify")
-def auth_verify(body: CodeIn, response: Response, request: Request):
-    if auth.login_disabled():
-        raise HTTPException(404, "Sign-in is disabled: the system has a single user.")
-    token = auth.verify_code(body.email, body.code)
+    token = auth.login(body.username, body.password)
     response.set_cookie(auth.SESSION_COOKIE, token, max_age=auth.SESSION_DAYS * 86400, httponly=True,
                         samesite="lax", secure=request.url.scheme == "https", path="/")
     return {"ok": True}
@@ -444,7 +417,7 @@ def update_task(task_id: int, body: TaskUpdate, user=User):
             if not org.EMAIL_RE.match(email):
                 raise HTTPException(400, "The email is not valid.")
             if not auth.allowed_domain(email):
-                raise HTTPException(400, "Only the company’s work emails are allowed.")
+                raise HTTPException(400, "This email domain is not allowed.")
             emp = org.employee_by_email(email)
             if emp:  # a known employee: link the task to them (their email is used)
                 org.set_task_assignee(task_id, emp["id"])

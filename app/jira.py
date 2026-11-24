@@ -30,7 +30,7 @@ def _paragraphs(t, link):
         f"From the meeting “{t['meeting_title']}” ({t['meeting_date']}).",
         f"Quote: “{t['quote']}”" if t.get("quote") else None,
         f"Deadline as said: {t['due_date_text']}" if t.get("due_date_text") else None,
-        f"Created by Meeting Memory: {link}",
+        f"Created by Meeting Assistant: {link}",
     ]
 
 

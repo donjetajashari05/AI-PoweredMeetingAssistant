@@ -1,4 +1,4 @@
-# Meeting Memory
+# Meeting Assistant
 
 Asistent për mbledhje me memorie afatgjatë: transkripton mbledhjen, nxjerr vendimet dhe detyrat,
 i krahason me tiketat ekzistuese në Jira ose Trello që të mos krijohen dublikata, dhe u përgjigjet
@@ -66,8 +66,7 @@ përdore vetëm për testim, jo për mbledhje konfidenciale.
 
 ### Hyrja dhe rolet
 
-Hyrja bëhet me emailin e punës: shkruan emailin, merr një kod 6-shifror (vlen 10 minuta).
-Pa SMTP të konfiguruar, kodi shfaqet në terminalin e serverit.
+Hyrja bëhet me username dhe password. Llogaria demo krijohet vetë në databazë herën e parë: `admin` / `admin123`.
 
 | Roli | Kush | Çka mund të bëjë |
 |------|------|------------------|

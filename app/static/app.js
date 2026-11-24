@@ -90,7 +90,7 @@ const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', '
 const MONTHS_FULL = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
 const DAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 // Readable on white (text ≥ 4.5:1) and as avatar backgrounds under white text
-const SPEAKER_COLORS = ['#0F766E', '#4F46E5', '#946200', '#B8336A', '#1F7A99', '#C2410C'];
+const SPEAKER_COLORS = ['#2563EB', '#D9480F', '#0E7C66', '#B8336A', '#1F6FB2', '#8A5A00'];
 
 const parseDate = (iso) => { const [y, m, d] = iso.split('-').map(Number); return new Date(y, m - 1, d); };
 const cap = (s) => s.charAt(0).toUpperCase() + s.slice(1);
@@ -1718,7 +1718,7 @@ async function renderTickets() {
       ].filter(Boolean).join(' · ') }));
     if (stage === 'sent') return el('article', { class: 'card ticket sent' }, head, ...body);
 
-    // Who gets the ticket: an employee from the list, or another work email
+    // Who gets the ticket: an employee from the list, or another email
     const people = state.org.employees.filter((e) => e.email && (e.active || e.id === t.assignee_id));
     const known = people.find((e) => e.email.toLowerCase() === (t.recipient_email || '').toLowerCase());
     const other = el('input', { type: 'email', value: !known && t.recipient_email ? t.recipient_email : '', placeholder: 'name@company.com',
@@ -2114,57 +2114,32 @@ document.querySelector('[data-action="upload"]').addEventListener('click', () =>
 const loginEl = document.getElementById('login');
 const shellEl = document.getElementById('shell');
 const loginErr = document.getElementById('login-error');
-const emailForm = document.getElementById('login-email-form');
-const codeForm = document.getElementById('login-code-form');
-let loginEmail = '';
+const loginForm = document.getElementById('login-form');
 
 function showLogin() {
   stopPolling();
   state.me = null;
   shellEl.hidden = true;
   loginEl.hidden = false;
-  emailForm.hidden = false;
-  codeForm.hidden = true;
   loginErr.textContent = '';
-  document.getElementById('login-title').textContent = 'Sign in with your work email';
-  document.getElementById('login-sub').textContent = 'You’ll get a 6-digit code by email.';
-  setTimeout(() => document.getElementById('login-email').focus(), 0);
+  document.getElementById('login-password').value = '';
+  setTimeout(() => document.getElementById('login-username').focus(), 0);
 }
 
-emailForm.addEventListener('submit', async (e) => {
+loginForm.addEventListener('submit', async (e) => {
   e.preventDefault();
-  const btn = emailForm.querySelector('button');
-  loginErr.textContent = '';
-  btn.disabled = true;
-  loginEmail = document.getElementById('login-email').value.trim();
-  try {
-    const res = await api('/api/auth/request', { method: 'POST', body: JSON.stringify({ email: loginEmail }) });
-    emailForm.hidden = true;
-    codeForm.hidden = false;
-    document.getElementById('login-title').textContent = 'Enter the code';
-    document.getElementById('login-sub').textContent = res && res.dev_code
-      ? `Test mode (no real email): your code is ${res.dev_code}.`
-      : `If ${loginEmail} is registered, the code was sent there. It is valid for 10 minutes.`;
-    const code = document.getElementById('login-code');
-    code.value = (res && res.dev_code) || '';
-    code.focus();
-  } catch (err) { loginErr.textContent = err.message; }
-  btn.disabled = false;
-});
-
-codeForm.addEventListener('submit', async (e) => {
-  e.preventDefault();
-  const btn = codeForm.querySelector('button[type=submit]');
+  const btn = loginForm.querySelector('button');
   loginErr.textContent = '';
   btn.disabled = true;
   try {
-    await api('/api/auth/verify', { method: 'POST', body: JSON.stringify({ email: loginEmail, code: document.getElementById('login-code').value }) });
+    await api('/api/auth/login', { method: 'POST', body: JSON.stringify({
+      username: document.getElementById('login-username').value.trim(),
+      password: document.getElementById('login-password').value,
+    }) });
     await start();
   } catch (err) { loginErr.textContent = err.message; }
   btn.disabled = false;
 });
-
-document.getElementById('login-back').addEventListener('click', showLogin);
 
 document.getElementById('logout').addEventListener('click', async () => {
   try { await api('/api/auth/logout', { method: 'POST' }); } catch { /* ignore */ }

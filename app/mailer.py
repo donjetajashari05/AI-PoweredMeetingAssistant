@@ -9,7 +9,7 @@ Outgoing email through any SMTP service (STARTTLS on port 587): Gmail, Brevo, ..
     SMTP_HOST=smtp-relay.brevo.com
     SMTP_USER=<the "Login" from Brevo > SMTP & API, …@smtp-brevo.com>
     SMTP_PASSWORD=<a Brevo SMTP key>
-    MAIL_FROM=Meeting Memory <a sender verified in Brevo>
+    MAIL_FROM=Meeting Assistant <a sender verified in Brevo>
 
 Without SMTP_USER/SMTP_PASSWORD nothing leaves this computer: every email is
 kept in the outbox (page "Emails sent") with status "dry-run".
@@ -65,7 +65,7 @@ def _html(body_text, link=None, link_text=None):
   <div style="background:#fff;border:1px solid #E2EBE9;border-top:0;border-radius:0 0 18px 18px;padding:24px">
     {paragraphs}{button}
   </div>
-  <p style="color:#65757A;font-size:12px;margin:14px 4px">This email was sent automatically by Meeting Memory.</p>
+  <p style="color:#65757A;font-size:12px;margin:14px 4px">This email was sent automatically by Meeting Assistant.</p>
 </div></body></html>"""
 
 
@@ -79,7 +79,7 @@ def send(to_email, subject, body_text, kind=None, link=None, link_text=None):
         status, error = "failed", "Set MAIL_FROM in .env to a sender verified in Brevo."
     elif configured():
         msg = EmailMessage()
-        sender = os.environ.get("MAIL_FROM") or formataddr(("Meeting Memory", os.environ["SMTP_USER"]))
+        sender = os.environ.get("MAIL_FROM") or formataddr(("Meeting Assistant", os.environ["SMTP_USER"]))
         msg["From"] = sender
         msg["To"] = to_email
         msg["Subject"] = subject
