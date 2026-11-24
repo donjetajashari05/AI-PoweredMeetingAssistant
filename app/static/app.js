@@ -90,7 +90,7 @@ const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', '
 const MONTHS_FULL = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
 const DAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 // Readable on white (text ≥ 4.5:1) and as avatar backgrounds under white text
-const SPEAKER_COLORS = ['#683790', '#17794E', '#946200', '#B8336A', '#1F7A99', '#C2410C'];
+const SPEAKER_COLORS = ['#0F766E', '#4F46E5', '#946200', '#B8336A', '#1F7A99', '#C2410C'];
 
 const parseDate = (iso) => { const [y, m, d] = iso.split('-').map(Number); return new Date(y, m - 1, d); };
 const cap = (s) => s.charAt(0).toUpperCase() + s.slice(1);
@@ -170,7 +170,11 @@ async function loadStatus() {
   document.getElementById('st-claude-t').title = state.status.ai_label || '';
   set('st-speakers', state.status.speakers, 'active', 'no token');
   set('st-email', state.status.email, 'connected', 'test');
-  set('st-jira', state.status.jira, state.status.jira_mock ? 'test' : 'connected', 'no token');
+  set('st-jira', state.status.jira, state.status.jira_mock ? 'test' : 'connected', 'not connected');
+  set('st-embed', state.status.embeddings, 'semantic', 'keywords only');
+  document.getElementById('st-embed-t').title = state.status.embeddings
+    ? 'Multilingual embeddings: “rregullo hyrjen” finds “Fix login error”.'
+    : 'Install sentence-transformers for cross-language matching.';
   const jiraRow = document.getElementById('st-jira').parentElement;
   if (state.status.jira_url && jiraRow.tagName !== 'A') {
     const link = el('a', { class: jiraRow.className, href: state.status.jira_url, target: '_blank', rel: 'noopener', title: 'Hap Jira' });
@@ -217,6 +221,7 @@ async function route() {
     else if (name === 'tickets' && isManager()) await renderTickets();
     else if (name === 'ask') renderAsk();
     else if (name === 'team' && isAdmin()) await renderTeam();
+    else if (name === 'connections' && isManager()) await renderConnections();
     else if (name === 'outbox' && isAdmin()) await renderOutbox();
     else if (name === 'vocabulary' && isAdmin()) await renderVocabulary();
     else await renderHome();
@@ -324,14 +329,142 @@ function ticketPill(task) {
   return null;
 }
 
-const inTicket = (t) => !!(t.merged_into || t.is_ticket);
+const isLinked = (t) => t.dedup_state === 'applied' && t.dedup_action && t.dedup_action !== 'new';
+const awaitsCheck = (t) => t.dedup_state === 'pending' && t.dedup_action && t.dedup_action !== 'new';
+const inTicket = (t) => !!(t.merged_into || t.is_ticket || isLinked(t) || awaitsCheck(t));
+
+/* ---------- Duplicate check & task history ---------- */
+
+const ACTION_LABEL = {
+  new: ['New task', 'A new ticket will be made from it.'],
+  duplicate: ['Duplicate', 'Already a ticket: nothing new is created; the mention is noted in the history.'],
+  update: ['Update', 'The existing ticket gets the new deadline/person and a comment with this meeting.'],
+  reopen: ['Reopen', 'The closed ticket is moved back to open instead of creating a new one.'],
+};
+const parseJSON = (s, d) => { try { return s ? JSON.parse(s) : d; } catch { return d; } };
+
+function targetLabel(c) {
+  if (!c) return '';
+  return `${c.key ? `${c.key} · ` : ''}${c.title}`;
+}
+
+function linkPill(task) {
+  if (isLinked(task)) {
+    const target = parseJSON(task.dedup_target, null);
+    return el('button', { type: 'button', class: 'ticket-pill', title: `Linked to: ${targetLabel(target)} — click for the history`,
+      onclick: () => historyDialog(task.id) }, `${ACTION_LABEL[task.dedup_action][0]}: ${task.linked_key || 'earlier task'}`);
+  }
+  if (task.dedup_state === 'pending' && task.dedup_action && task.dedup_action !== 'new') {
+    return el('span', { class: 'draft-pill', title: task.dedup_reason || '' }, `Possible ${task.dedup_action}`);
+  }
+  if (task.jira_key) {
+    return el('button', { type: 'button', class: 'icon-btn', title: 'History of this ticket', 'aria-label': 'History',
+      onclick: () => historyDialog(task.id) }, icon('retry', 14, 2));
+  }
+  return null;
+}
+
+const EVENT_TEXT = {
+  created: 'Ticket created', mentioned: 'Mentioned again in a meeting', due_changed: 'Deadline changed',
+  assignee_changed: 'Person changed', done: 'Marked done', reopened: 'Reopened', status_changed: 'Status changed on the platform',
+};
+
+async function historyDialog(taskId) {
+  const { task, events } = await api(`/api/tasks/${taskId}/history`).catch((e) => { toast(e.message); return {}; });
+  if (!task) return;
+  const list = events.length ? el('div', { class: 'list history' }, events.map((e) => el('div', { class: 'list-row' },
+    el('strong', { text: EVENT_TEXT[e.kind] || e.kind }),
+    e.new_value ? el('span', { text: ` ${e.old_value ? `${e.old_value} → ` : ''}${e.new_value}` }) : null,
+    el('div', { class: 'small subtle', text: [e.meeting_title ? `${e.meeting_title} (${e.meeting_date})` : null,
+      e.source === 'platform' ? 'from Jira/Trello' : null, e.actor_name, e.created_at.slice(0, 16).replace('T', ' ')].filter(Boolean).join(' · ') }),
+    e.quote ? el('div', { class: 'small', text: `“${e.quote}”` }) : null)))
+    : el('p', { class: 'small subtle', text: 'No changes recorded yet.' });
+  openForm(`History: ${task.linked_key || task.jira_key || task.description.slice(0, 40)}`, [list], { onSave: async () => {}, saveText: 'Close' });
+}
+
+/** Review the duplicate-check proposal for one task: confirm it, or pick another action/ticket. */
+function dedupDialog(task, reload) {
+  const cands = parseJSON(task.dedup_candidates, []);
+  const target = parseJSON(task.dedup_target, null);
+  const changes = parseJSON(task.dedup_changes, {});
+  const pickIdx = target ? Math.max(1, cands.findIndex((c) => (c.key && c.key === target.key) || (c.task_id && c.task_id === target.task_id)) + 1) : 1;
+  const action = el('select', {}, Object.entries(ACTION_LABEL).map(([k, [label]]) =>
+    el('option', { value: k, text: label, selected: k === (task.dedup_action || 'new') })));
+  const cand = el('select', {}, cands.map((c, i) => el('option', { value: i + 1, selected: i + 1 === pickIdx,
+    text: `${targetLabel(c)} — ${c.done ? 'DONE' : (c.status || 'open')}${c.assignee ? `, ${c.assignee}` : ''}${c.due_date ? `, due ${c.due_date}` : ''} (${Math.round(c.score * 100)}%)` })));
+  const hint = el('small', {});
+  const paint = () => { hint.textContent = ACTION_LABEL[action.value][1]; cand.disabled = action.value === 'new'; };
+  action.addEventListener('change', paint);
+  paint();
+  openForm('Check against existing work', [
+    el('div', { class: 'stack', style: { gap: '10px' } },
+      el('div', {}, el('span', { class: 'eyebrow', text: 'From this meeting' }), el('p', { text: task.description }),
+        task.quote ? el('p', { class: 'small subtle', text: `“${task.quote}”` }) : null),
+      task.dedup_reason ? notice('', 'alert', el('strong', { text: `AI: ${ACTION_LABEL[task.dedup_action || 'new'][0]}. ` }), task.dedup_reason,
+        changes.due_date ? ` New deadline: ${changes.due_date}.` : '', changes.assignee ? ` New person: ${changes.assignee}.` : '') : null,
+      el('div', { class: 'field-grid' },
+        field('Action', action, { wide: false }),
+        cands.length ? field('Existing ticket', cand, { hint: 'Candidates from earlier meetings and from Jira/Trello, most similar first.' }) : null,
+        el('div', { class: 'field field-wide' }, hint))),
+  ], {
+    saveText: 'Confirm',
+    onSave: async () => {
+      const body = { action: action.value };
+      if (action.value !== 'new' && cands.length) body.candidate = Number(cand.value);
+      await api(`/api/tasks/${task.id}/dedup`, { method: 'POST', body: JSON.stringify(body) });
+      toast(action.value === 'new' ? 'Kept as a new task.' : `Done: ${ACTION_LABEL[action.value][0].toLowerCase()}.`);
+      reload();
+    },
+  });
+}
+
+/** Meeting page: the AI's proposals that wait for the PM. */
+function dedupCard(m, reload) {
+  const pending = m.tasks.filter((t) => t.dedup_state === 'pending' && t.dedup_action && t.dedup_action !== 'new');
+  const checked = m.tasks.filter((t) => t.dedup_action).length;
+  if (!m.can_manage || (!pending.length && !checked)) return null;
+  const recheck = el('button', { type: 'button', class: 'btn btn-sm', onclick: async () => {
+    recheck.disabled = true;
+    try {
+      const r = await api(`/api/meetings/${m.id}/dedup`, { method: 'POST' });
+      toast(r.tracker_error ? `Checked memory only: ${r.tracker_error}` : `Checked ${r.checked} task(s).`);
+      reload();
+    } catch (e) { toast(e.message); recheck.disabled = false; }
+  } }, icon('retry', 14, 2), 'Check again');
+  return el('section', { class: 'card', style: { gap: '6px' } },
+    el('div', { class: 'card-head' }, el('span', { class: 'eyebrow', text: 'Existing work' }), el('div', { class: 'actions' }, recheck)),
+    pending.length
+      ? el('p', { class: 'small subtle', text: 'These action items look like work that already exists. Confirm before anything changes in Jira/Trello.' })
+      : el('p', { class: 'small subtle', text: 'No duplicates found: every action item is new work.' }),
+    pending.map((t) => {
+      const target = parseJSON(t.dedup_target, null);
+      return el('div', { class: 'dedup-row' },
+        el('div', { class: 'grow' },
+          el('span', { class: 'desc', text: t.description }),
+          el('div', { class: 'meta' },
+            el('span', { class: `pill dedup-${t.dedup_action}`, text: ACTION_LABEL[t.dedup_action][0] }),
+            target ? (target.url && !target.url.startsWith('mock:')
+              ? el('a', { class: 'jira-link', href: target.url, target: '_blank', rel: 'noopener', text: target.key || 'ticket' }) : null) : null,
+            el('span', { class: 'small', text: target ? target.title : '' }),
+            target ? el('span', { class: 'small subtle', text: `${target.done ? 'done' : (target.status || 'open')}${target.source === 'memory' || target.source === 'this meeting' ? ` · ${target.source}` : ''}` }) : null),
+          t.dedup_reason ? el('small', { class: 'subtle', text: t.dedup_reason }) : null),
+        el('div', { class: 'task-actions' },
+          el('button', { type: 'button', class: 'btn btn-sm btn-primary', onclick: async (e) => {
+            e.currentTarget.disabled = true;
+            try { await api(`/api/tasks/${t.id}/dedup`, { method: 'POST', body: '{}' }); toast('Confirmed.'); reload(); } catch (err) { toast(err.message); e.currentTarget.disabled = false; }
+          } }, icon('tick', 14, 2.4), 'Confirm'),
+          el('button', { type: 'button', class: 'btn btn-sm', onclick: () => dedupDialog(t, reload) }, 'Review')));
+    }));
+}
 
 function taskRow(task, { showMeeting = false, onChange, assignable = false, readOnly = false, manage = null, pick = null, onEdit = null, compact = false } = {}) {
   const row = el('div', { class: `task${task.status === 'done' ? ' is-done' : ''}${pick && pick.selected.has(task.id) ? ' is-picked' : ''}` });
   // Selection mode (Tasks page): the checkbox picks tasks for a ticket instead of marking them done
   const box = pick ? el('input', {
     type: 'checkbox', class: 'pick', checked: pick.selected.has(task.id), disabled: inTicket(task),
-    'aria-label': `Select for a ticket: ${task.description}`, title: inTicket(task) ? 'Already part of a ticket' : 'Select for a ticket',
+    'aria-label': `Select for a ticket: ${task.description}`,
+    title: awaitsCheck(task) ? 'Confirm the “Existing work” check first' : isLinked(task) ? 'Linked to an existing ticket'
+      : inTicket(task) ? 'Already part of a ticket' : 'Select for a ticket',
     onchange: (e) => { row.classList.toggle('is-picked', e.target.checked); pick.toggle(task, e.target.checked); },
   }) : el('input', {
     type: 'checkbox', checked: task.status === 'done', 'aria-label': `Mark as done: ${task.description}`,
@@ -358,9 +491,11 @@ function taskRow(task, { showMeeting = false, onChange, assignable = false, read
     who,
     duePill(task),
     task.due_date_text ? el('span', { class: 'subtle', text: `“${task.due_date_text}”` }) : null,
-    task.jira_key ? el('a', { class: 'jira-link', href: task.jira_url, target: '_blank', rel: 'noopener', text: task.jira_key, title: 'Open in Jira' }) : null,
+    task.jira_key ? el('a', { class: 'jira-link', href: task.jira_url, target: '_blank', rel: 'noopener', text: task.jira_key, title: 'Open the ticket' }) : null,
+    task.tracker_status ? el('span', { class: 'subtle small', text: task.tracker_status }) : null,
     ticketPill(task),
-    !task.jira_key && task.jira_error ? el('span', { class: 'jira-error', text: `Jira: ${task.jira_error}` }) : null,
+    linkPill(task),
+    !task.jira_key && task.jira_error ? el('span', { class: 'jira-error', text: `Platform: ${task.jira_error}` }) : null,
     showMeeting ? el('a', { href: `#/meeting/${task.meeting_id}`, class: 'small', text: task.meeting_title }) : null,
   );
   row.append(box, el('div', { class: 'grow' }, el('span', { class: 'desc', text: task.description }), meta));
@@ -507,7 +642,7 @@ async function renderHome() {
           : 'Add your first meeting, then ask anything about it.' })),
       isManager() ? el('div', { class: 'actions' },
         el('button', { type: 'button', class: 'btn btn-glass', onclick: () => openUpload('file') }, icon('upload', 16, 2), 'Upload audio'),
-        el('button', { type: 'button', class: 'btn btn-yellow', onclick: () => openUpload('record') }, el('span', { class: 'rec-dot' }), 'Record')) : null),
+        el('button', { type: 'button', class: 'btn btn-highlight', onclick: () => openUpload('record') }, el('span', { class: 'rec-dot' }), 'Record')) : null),
     el('label', { for: 'ask', class: 'sr-only', text: 'Ask about any past meeting' }),
     ask.form, ask.chips, out);
 
@@ -590,7 +725,7 @@ function processingCard(list) {
   const card = el('section', { class: 'card', 'aria-label': 'Processing' });
   if (!busy.length) {
     card.append(
-      cardTitle('wave', 'Nothing in progress', 'yellow'),
+      cardTitle('wave', 'Nothing in progress', 'highlight'),
       el('p', { class: 'small muted', text: 'Upload a recording or record the meeting straight from the microphone. The system transcribes it and extracts decisions and tasks automatically.' }),
       el('div', { class: 'actions' }, ...newMeetingButtons().reverse()),
     );
@@ -622,7 +757,7 @@ function recentMeetingsCard(list) {
 
 function openTasksCard(tasks) {
   const card = el('section', { class: 'card', 'aria-label': 'Open tasks', style: { gap: '4px' } },
-    el('div', { class: 'card-head', style: { marginBottom: '4px' } }, cardTitle('check', isManager() ? 'Open tasks' : 'My tasks', 'yellow'),
+    el('div', { class: 'card-head', style: { marginBottom: '4px' } }, cardTitle('check', isManager() ? 'Open tasks' : 'My tasks', 'highlight'),
       el('a', { href: '#/tasks', class: 'small', text: tasks.length ? `${tasks.length} total` : '' })));
   if (!tasks.length) card.append(el('div', { class: 'empty' }, el('strong', { text: 'No open tasks' }), 'Tasks from meetings appear here.'));
   else card.append(el('div', {}, tasks.slice(0, 6).map((t) => taskRow(t, { showMeeting: true }))));
@@ -937,6 +1072,7 @@ async function renderMeeting(id) {
   if (m.summary !== null && m.summary !== undefined) {
     side.append(...nn(
       el('section', { class: 'card' }, el('span', { class: 'eyebrow', text: 'Summary' }), el('p', { class: 'summary', text: m.summary })),
+      dedupCard(m, reloadMeeting),
       tasksCard,
       // Work people reported as finished: shown for context, never turned into tickets
       (m.completed || []).length ? el('section', { class: 'card' },
@@ -1187,6 +1323,17 @@ function groupForm(kind, group, reload, presetTeamId = null) {
   const pmSel = kind === 'project' ? el('select', {}) : null;
   const jiraKey = kind === 'project' ? el('input', { type: 'text', value: g.jira_key || '', maxlength: '10', placeholder: 'e.g. PAY',
     style: { textTransform: 'uppercase' } }) : null;
+  const board = kind === 'project' ? el('input', { type: 'text', value: g.trello_board || '', maxlength: '32', placeholder: 'e.g. aB12cD34' }) : null;
+  const tracker = kind === 'project' ? el('select', {},
+    el('option', { value: 'jira', text: 'Jira', selected: (g.tracker || 'jira') === 'jira' }),
+    el('option', { value: 'trello', text: 'Trello', selected: g.tracker === 'trello' })) : null;
+  let jiraField, boardField;
+  const paintTracker = () => {
+    if (!tracker) return;
+    jiraField.hidden = tracker.value !== 'jira';
+    boardField.hidden = tracker.value !== 'trello';
+  };
+  if (tracker) tracker.addEventListener('change', paintTracker);
   const paintMembers = () => {
     if (kind === 'team') {
       members = checklist(people(null), g.member_ids, 'Add employees first.');
@@ -1218,14 +1365,18 @@ function groupForm(kind, group, reload, presetTeamId = null) {
     field('Name', name, { wide: kind === 'team' }),
     team ? field('Team', team, { wide: false }) : null,
     pmSel ? field('Project manager', pmSel, { wide: false, hint: 'Gets meeting summaries and reminders by email.' }) : null,
-    jiraKey ? field('Jira key', jiraKey, { wide: false, hint: 'Where this project’s tickets are created.' }) : null,
+    tracker ? field('Tickets go to', tracker, { wide: false, hint: 'Jira or Trello: the app works the same with both.' }) : null,
+    jiraKey ? (jiraField = field('Jira key', jiraKey, { wide: false, hint: 'Where this project’s tickets are created.' })) : null,
+    board ? (boardField = field('Trello board', board, { wide: false, hint: 'The code in the board address: trello.com/b/<code>/…' })) : null,
     field('Description', desc),
     membersSlot);
   paintMembers();
+  paintTracker();
   openForm(group ? `Edit ${word}` : (kind === 'team' ? 'New team' : 'New project'), [grid], {
     onSave: async () => {
       const body = JSON.stringify({ name: name.value, description: desc.value, team_id: team && team.value ? Number(team.value) : null,
-        pm_id: pmSel && pmSel.value ? Number(pmSel.value) : null, jira_key: jiraKey ? jiraKey.value : null, member_ids: members.values() });
+        pm_id: pmSel && pmSel.value ? Number(pmSel.value) : null, jira_key: jiraKey ? jiraKey.value : null,
+        tracker: tracker ? tracker.value : null, trello_board: board ? board.value.trim() : null, member_ids: members.values() });
       await api(group ? `/api/${kind}s/${group.id}` : `/api/${kind}s`, { method: group ? 'PUT' : 'POST', body });
       toast('Saved.');
       reload();
@@ -1323,7 +1474,7 @@ async function renderTeam() {
     const orphans = projects.filter((p) => !p.team_id || !byId(teams, p.team_id));
     const projectRow = (p) => el('div', { class: 'org-project' },
       selectable({ type: 'project', id: p.id },
-        el('span', { class: 'org-name', text: p.name + (p.jira_key ? ` · ${p.jira_key}` : '') }),
+        el('span', { class: 'org-name', text: p.name + (p.tracker === 'trello' ? (p.trello_board ? ' · Trello' : '') : (p.jira_key ? ` · ${p.jira_key}` : '')) }),
         el('span', { class: 'small subtle', text: [p.pm_id && byId(state.org.employees, p.pm_id) ? `PM: ${byId(state.org.employees, p.pm_id).full_name}` : 'no PM',
           `${p.member_ids.length} member${p.member_ids.length === 1 ? '' : 's'}`].join(' · ') })),
       faces(p.member_ids),
@@ -1570,7 +1721,7 @@ async function renderTickets() {
     // Who gets the ticket: an employee from the list, or another work email
     const people = state.org.employees.filter((e) => e.email && (e.active || e.id === t.assignee_id));
     const known = people.find((e) => e.email.toLowerCase() === (t.recipient_email || '').toLowerCase());
-    const other = el('input', { type: 'email', value: !known && t.recipient_email ? t.recipient_email : '', placeholder: 'name@anchorzup.com',
+    const other = el('input', { type: 'email', value: !known && t.recipient_email ? t.recipient_email : '', placeholder: 'name@company.com',
       autocomplete: 'off', 'aria-label': 'Other email', hidden: !!known || !t.recipient_email });
     const person = el('select', { 'aria-label': 'Send the ticket to' },
       el('option', { value: '', text: '— Choose a person —', selected: !t.recipient_email }),
@@ -1726,6 +1877,68 @@ async function renderOutbox() {
     state.status.email ? null : notice('warn', 'mail', el('strong', { text: 'Email is not configured. ' }),
       'Nothing is sent out: emails are only kept here. To send them, fill in SMTP_USER and SMTP_PASSWORD (a Google App password) in .env and restart the server.'),
     card));
+}
+
+/* ================= Jira & Trello connections ================= */
+
+async function renderConnections() {
+  const data = await api('/api/connections');
+  const has = (p) => data.accounts.find((a) => a.platform === p);
+  const PLATFORM = {
+    jira: {
+      name: 'Jira Cloud', help: 'API token: id.atlassian.com → Security → API tokens.',
+      fields: () => {
+        const base = el('input', { type: 'url', placeholder: 'https://company.atlassian.net', required: true });
+        const user = el('input', { type: 'email', placeholder: 'you@company.com', required: true, autocomplete: 'off' });
+        const token = el('input', { type: 'password', required: true, autocomplete: 'new-password' });
+        return { inputs: [field('Jira address', base), field('Account email', user, { wide: false }), field('API token', token, { wide: false })],
+          body: () => ({ base_url: base.value.trim(), username: user.value.trim(), token: token.value }) };
+      },
+    },
+    trello: {
+      name: 'Trello', help: 'API key and token: trello.com/power-ups/admin → your Power-Up → API key, then “Token”.',
+      fields: () => {
+        const key = el('input', { type: 'text', required: true, autocomplete: 'off' });
+        const token = el('input', { type: 'password', required: true, autocomplete: 'new-password' });
+        return { inputs: [field('API key', key, { wide: false }), field('Token', token, { wide: false })],
+          body: () => ({ username: key.value.trim(), token: token.value }) };
+      },
+    },
+  };
+  const card = (p) => {
+    const acc = has(p);
+    const info = PLATFORM[p];
+    return el('section', { class: 'card' },
+      el('div', { class: 'card-head' }, cardTitle('jira', info.name), acc
+        ? el('span', { class: 'status done', text: 'Connected' }) : el('span', { class: 'status warn', text: 'Not connected' })),
+      acc ? el('p', { class: 'small subtle', text: `${acc.base_url ? `${acc.base_url} · ` : ''}${acc.username} · since ${acc.created_at.slice(0, 10)}` }) : null,
+      el('p', { class: 'small subtle', text: info.help }),
+      el('div', { class: 'actions' },
+        el('button', { type: 'button', class: 'btn btn-primary btn-sm', onclick: () => {
+          const f = info.fields();
+          openForm(`Connect ${info.name}`, [el('div', { class: 'field-grid' }, f.inputs),
+            el('p', { class: 'small subtle', text: 'The token is stored encrypted and is never shown again.' })], {
+            saveText: 'Connect',
+            onSave: async () => { await api(`/api/connections/${p}`, { method: 'PUT', body: JSON.stringify(f.body()) }); toast('Connected.'); await loadStatus(); renderConnections(); },
+          });
+        } }, acc ? 'Replace token' : 'Connect'),
+        acc ? el('button', { type: 'button', class: 'btn btn-sm btn-danger', onclick: async () => {
+          if (!confirm(`Disconnect ${info.name}? The saved token is deleted.`)) return;
+          try { await api(`/api/connections/${p}`, { method: 'DELETE' }); toast('Disconnected.'); await loadStatus(); renderConnections(); } catch (e) { toast(e.message); }
+        } }, 'Disconnect') : null));
+  };
+  const sync = el('button', { type: 'button', class: 'btn', onclick: async () => {
+    sync.disabled = true;
+    try {
+      const r = await api('/api/sync', { method: 'POST' });
+      toast(`Checked ${r.checked} ticket(s), ${r.changed} changed${r.errors.length ? `, ${r.errors.length} error(s)` : ''}.`);
+    } catch (e) { toast(e.message); } finally { sync.disabled = false; }
+  } }, icon('retry', 16, 2), 'Sync statuses now');
+  view.replaceChildren(el('div', { class: 'page' },
+    pageHead('Settings', 'Jira & Trello', sync),
+    el('p', { class: 'muted', text: 'Each project sends its tickets to Jira or Trello (set it on the Team page). Before a ticket is created, the app compares the task with the tickets already there, so nothing is created twice. Ticket statuses are read back every 30 minutes.' }),
+    data.mock ? notice('warn', 'alert', el('strong', { text: 'Test mode. ' }), 'JIRA_MOCK=1: no platform is called; tickets are kept in data/tracker_mock.json.') : null,
+    el('div', { class: 'row' }, el('div', { class: 'col-2' }, card('jira')), el('div', { class: 'col-2' }, card('trello')))));
 }
 
 /* ================= Upload / record dialog ================= */

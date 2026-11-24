@@ -9,7 +9,7 @@ Outgoing email through any SMTP service (STARTTLS on port 587): Gmail, Brevo, ..
     SMTP_HOST=smtp-relay.brevo.com
     SMTP_USER=<the "Login" from Brevo > SMTP & API, …@smtp-brevo.com>
     SMTP_PASSWORD=<a Brevo SMTP key>
-    MAIL_FROM=AnchorzUp Meeting Agent <a sender verified in Brevo>
+    MAIL_FROM=Meeting Memory <a sender verified in Brevo>
 
 Without SMTP_USER/SMTP_PASSWORD nothing leaves this computer: every email is
 kept in the outbox (page "Emails sent") with status "dry-run".
@@ -55,17 +55,17 @@ def _html(body_text, link=None, link_text=None):
     paragraphs = "".join(
         f'<p style="margin:0 0 14px;line-height:1.55">{html.escape(p).replace(chr(10), "<br>")}</p>'
         for p in body_text.strip().split("\n\n"))
-    button = (f'<p style="margin:22px 0 0"><a href="{html.escape(link)}" style="background:#683790;color:#fff;'
+    button = (f'<p style="margin:22px 0 0"><a href="{html.escape(link)}" style="background:#0F766E;color:#fff;'
               f'padding:12px 22px;border-radius:999px;text-decoration:none;font-weight:700;display:inline-block">'
               f'{html.escape(link_text or "Open")}</a></p>') if link else ""
-    return f"""<!doctype html><html><body style="margin:0;background:#FAF7FD;font-family:Arial,sans-serif;color:#2B2633">
+    return f"""<!doctype html><html><body style="margin:0;background:#F4F8F7;font-family:Arial,sans-serif;color:#1C2629">
 <div style="max-width:560px;margin:0 auto;padding:28px 16px">
-  <div style="background:#3D1466;color:#fff;border-radius:18px 18px 0 0;padding:18px 24px;font-weight:700;letter-spacing:.04em">
-    AnchorzUp <span style="color:#F3CB50">Meeting Agent</span></div>
-  <div style="background:#fff;border:1px solid #ECE4F6;border-top:0;border-radius:0 0 18px 18px;padding:24px">
+  <div style="background:#0E1B2C;color:#fff;border-radius:18px 18px 0 0;padding:18px 24px;font-weight:700;letter-spacing:.02em">
+    Meeting <span style="color:#F2B544">Memory</span></div>
+  <div style="background:#fff;border:1px solid #E2EBE9;border-top:0;border-radius:0 0 18px 18px;padding:24px">
     {paragraphs}{button}
   </div>
-  <p style="color:#736C7C;font-size:12px;margin:14px 4px">This email was sent automatically by AnchorzUp Meeting Agent.</p>
+  <p style="color:#65757A;font-size:12px;margin:14px 4px">This email was sent automatically by Meeting Memory.</p>
 </div></body></html>"""
 
 
@@ -79,7 +79,7 @@ def send(to_email, subject, body_text, kind=None, link=None, link_text=None):
         status, error = "failed", "Set MAIL_FROM in .env to a sender verified in Brevo."
     elif configured():
         msg = EmailMessage()
-        sender = os.environ.get("MAIL_FROM") or formataddr(("AnchorzUp Meeting Agent", os.environ["SMTP_USER"]))
+        sender = os.environ.get("MAIL_FROM") or formataddr(("Meeting Memory", os.environ["SMTP_USER"]))
         msg["From"] = sender
         msg["To"] = to_email
         msg["Subject"] = subject

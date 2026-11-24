@@ -1,0 +1,11 @@
+[
+  {"task": "Rregullo problemin me hyrjen në sistem", "quote": "kqyre qat problem me login-in", "lang": "cross",
+   "candidates": [{"key": "PAY-12", "title": "Fix login error"}, {"key": "PAY-13", "title": "Add CSV export to the payroll report"}],
+   "match": "PAY-12"},
+  {"task": "Add CSV export to the payroll report", "quote": "", "lang": "same",
+   "candidates": [{"key": "PAY-12", "title": "Fix login error"}, {"key": "PAY-13", "title": "Export payroll report as CSV"}],
+   "match": "PAY-13"},
+  {"task": "Write unit tests for the invoice API", "quote": "", "lang": "same",
+   "candidates": [{"key": "PAY-14", "title": "Fix invoice API timeout"}, {"key": "PAY-12", "title": "Fix login error"}],
+   "match": null}
+]

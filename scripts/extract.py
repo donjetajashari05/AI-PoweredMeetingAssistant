@@ -133,8 +133,19 @@ def participants_text(people):
     return "\n".join(lines)
 
 
-def extract(transcript, meeting_date: date, client=None, participants=None, glossary=None) -> MeetingNotes:
+MEMORY_RULES = """
+
+PROJECT MEMORY: you may also get the project's open work, recent decisions and summaries from
+earlier meetings. Use it to understand references ("ajo tiketa e login-it", "the bug from last week").
+- If earlier open work is reported finished in this meeting, put it in `completed`.
+- If earlier work is discussed again (new deadline, new person, blocked, needed again after it was
+  closed), STILL list it as a task with the new details: the system links it to the existing ticket.
+- Never copy open work into `tasks` just because it is in the memory: only what THIS meeting discussed."""
+
+
+def extract(transcript, meeting_date: date, client=None, participants=None, glossary=None, memory=None) -> MeetingNotes:
     """glossary: [{"term", "meaning"}] from data/fjalori.txt (slang, dialect, work terms).
+    memory: text with the project's open work, decisions and summaries (app/memory.context_for).
     Uses Claude or Groq (see llm.py); raises llm.LLMError with a readable message."""
     team =(f"Team members:\n<team_members>\n{participants_text(participants)}\n</team_members>\n\n"
             if participants else "")
@@ -142,13 +153,15 @@ def extract(transcript, meeting_date: date, client=None, participants=None, glos
     if glossary:
         from vocab import glossary_text
         vocab = f"Team vocabulary:\n<vocabulary>\n{glossary_text(glossary)}\n</vocabulary>\n\n"
+    past = f"Project memory:\n<project_memory>\n{memory}\n</project_memory>\n\n" if memory else ""
     user_message = (
         f"Meeting date: {meeting_date.isoformat()} ({WEEKDAYS_EN[meeting_date.weekday()]})\n\n"
         f"Calendar:\n{calendar_hint(meeting_date)}\n\n"
-        f"{team}{vocab}"
+        f"{team}{vocab}{past}"
         f"<transcript>\n{transcript}\n</transcript>"
     )
-    notes = llm.structured(SYSTEM_PROMPT, user_message, MeetingNotes, max_tokens=16000, effort="medium")
+    system = SYSTEM_PROMPT + (MEMORY_RULES if memory else "")
+    notes = llm.structured(system, user_message, MeetingNotes, max_tokens=16000, effort="medium")
     return validate_dates(notes)
 
 

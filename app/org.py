@@ -74,6 +74,17 @@ MIGRATIONS = {
         "is_ticket": "INTEGER NOT NULL DEFAULT 0",  # 1 = shown on the Tickets page
         "merged_from": "TEXT",                       # ticket row: JSON list of the source task ids
         "merged_into": "INTEGER",                    # task row: the ticket it became part of
+        # Platform status, read back from Jira/Trello (memory.sync_statuses)
+        "tracker_status": "TEXT",
+        # Duplicate check (app/dedup.py): the AI's proposal, confirmed by the PM (memory.apply_action)
+        "dedup_action": "TEXT",       # new | duplicate | update | reopen
+        "dedup_target": "TEXT",       # JSON: the existing ticket/task it matches
+        "dedup_candidates": "TEXT",   # JSON: the candidates above the threshold, best first
+        "dedup_reason": "TEXT",
+        "dedup_changes": "TEXT",      # JSON: {"due_date", "assignee"} for an update
+        "dedup_state": "TEXT",        # pending | applied
+        "linked_key": "TEXT",         # the existing ticket this task was linked to
+        "linked_task_id": "INTEGER",  # the existing task in memory it was linked to
     },
     "employees": {
         "is_admin": "INTEGER NOT NULL DEFAULT 0",
@@ -81,6 +92,8 @@ MIGRATIONS = {
     "projects": {
         "pm_id": "INTEGER REFERENCES employees(id) ON DELETE SET NULL",  # one project manager
         "jira_key": "TEXT",                                              # Jira project key, e.g. PAY
+        "tracker": "TEXT",                                               # jira | trello (NULL = DEFAULT_TRACKER / jira)
+        "trello_board": "TEXT",                                          # Trello board id or short link
     },
 }
 
@@ -225,6 +238,14 @@ def save_group(kind, data, group_id=None):
         if jira_key and not JIRA_KEY_RE.match(jira_key):
             raise OrgError("The Jira key must match Jira, e.g. PAY or HR2 (capital letters).")
         cols["jira_key"] = jira_key
+        tracker = (data.get("tracker") or "jira").lower()
+        if tracker not in ("jira", "trello"):
+            raise OrgError("The platform must be Jira or Trello.")
+        cols["tracker"] = tracker
+        board = _clean(data.get("trello_board"), 64)
+        if board and not re.match(r"^[A-Za-z0-9]{6,32}$", board):
+            raise OrgError("The Trello board id is the short code in the board's address (trello.com/b/<code>/…).")
+        cols["trello_board"] = board
         cols["pm_id"] = data.get("pm_id") or None
         if cols["pm_id"]:
             # The project manager is part of the project

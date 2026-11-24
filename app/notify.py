@@ -54,7 +54,7 @@ def meeting_processed(meeting_id):
         lines.append("TASKS\n" + "\n".join(
             f"• {t['description']} — {t['assignee_name'] or 'unassigned'}"
             + (f", due {t['due_date']}" if t["due_date"] else "") for t in m["tasks"]))
-        lines.append("Open the meeting, tick the action items that belong together and click “Make ticket”. Nothing goes to Jira until you send it.")
+        lines.append("Open the meeting, tick the action items that belong together and click “Make ticket”. Nothing changes in Jira or Trello until you confirm it.")
     if m["open_questions"]:
         lines.append("OPEN QUESTIONS\n" + "\n".join(f"• {q}" for q in m["open_questions"]))
     mailer.send(pm["email"], f"Meeting processed: {m['title']}", "\n\n".join(lines), kind="meeting",

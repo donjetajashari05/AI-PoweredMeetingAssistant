@@ -53,7 +53,7 @@ def _groq(path, body=None):
         GROQ_URL + path, method="POST" if body is not None else "GET",
         data=json.dumps(body).encode() if body is not None else None,
         headers={"Authorization": f"Bearer {os.environ['GROQ_API_KEY']}",
-                 "Content-Type": "application/json", "User-Agent": "meeting-agent"})
+                 "Content-Type": "application/json", "User-Agent": "meeting-memory"})
     try:
         with urllib.request.urlopen(req, timeout=120) as r:
             return json.loads(r.read())

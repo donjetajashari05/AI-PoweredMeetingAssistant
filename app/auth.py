@@ -60,7 +60,7 @@ def admin_emails():
 
 
 def allowed_domain(email):
-    """If ALLOWED_EMAIL_DOMAINS is set (e.g. anchorzup.com), only those domains may log in."""
+    """If ALLOWED_EMAIL_DOMAINS is set (e.g. company.com), only those domains may log in."""
     domains = {d.strip().lower().lstrip("@") for d in (os.environ.get("ALLOWED_EMAIL_DOMAINS") or "").split(",") if d.strip()}
     return not domains or email.rsplit("@", 1)[-1] in domains
 

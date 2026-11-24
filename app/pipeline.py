@@ -12,7 +12,7 @@ import traceback
 from datetime import date
 from pathlib import Path
 
-from . import db, learning, notify, org
+from . import db, dedup, learning, memory, notify, org
 
 sys.path.insert(0, str(db.ROOT / "scripts"))
 
@@ -150,15 +150,26 @@ def _extract(meeting_id, data=None):
                       error=None)
     try:
         notes = extractor.extract(extractor.transcript_text(data), date.fromisoformat(m["meeting_date"]),
-                                  participants=people, glossary=glossary)
+                                  participants=people, glossary=glossary, memory=memory.context_for(m))
     except SystemExit as e:  # extract.py signals refusals / truncation this way
         raise RuntimeError(str(e))
     db.save_notes(meeting_id, notes.model_dump())
     org.link_assignees(meeting_id, people)
 
-    note = None
+    # 3) Duplicate check against earlier meetings and the tickets on Jira/Trello (nothing is sent yet)
+    remarks = []
+    db.update_meeting(meeting_id, note="Checking the tasks against existing tickets…")
+    try:
+        res = dedup.check_meeting(meeting_id)
+        if res["tracker_error"]:
+            remarks.append("Only memory was checked for duplicates: " + res["tracker_error"])
+    except Exception as e:  # a failed check must not lose the analysis
+        traceback.print_exc()
+        remarks.append(f"Duplicate check failed: {e}"[:300])
+
     if data.get("diarization_error"):
-        note = "No speakers: " + data["diarization_error"]
+        remarks.append("No speakers: " + data["diarization_error"])
+    note = " · ".join(remarks) or None
     db.update_meeting(meeting_id, status="done", progress=1, note=note)
     try:
         notify.meeting_processed(meeting_id)  # email the project's PM

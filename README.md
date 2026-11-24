@@ -1,4 +1,8 @@
-# AI Meeting Assistant me Memorie Afatgjate
+# Meeting Memory
+
+Asistent për mbledhje me memorie afatgjatë: transkripton mbledhjen, nxjerr vendimet dhe detyrat,
+i krahason me tiketat ekzistuese në Jira ose Trello që të mos krijohen dublikata, dhe u përgjigjet
+pyetjeve mbi mbledhjet e kaluara.
 
 ## Struktura
 
@@ -6,15 +10,20 @@
 meeting-assistant/
 ├── app/                   # aplikacioni web (FastAPI + faqja)
 │   ├── main.py            # API
-│   ├── pipeline.py        # përpunimi në sfond: transkriptim → folës → Claude
-│   ├── assistant.py       # "Pyet arkivin" (kërkim + përgjigje me burime)
+│   ├── pipeline.py        # përpunimi në sfond: transkriptim → folës → analiza → kontrolli i dublikimeve
+│   ├── trackers.py        # Jira dhe Trello pas një ndërfaqeje të përbashkët (modeli Adapter)
+│   ├── dedup.py           # kontrolli i dublikimeve në dy nivele (kandidatët + vendimi)
+│   ├── memory.py          # historiku i detyrave, sinkronizimi i statusit, konteksti për mbledhjen e radhës
+│   ├── jira.py            # dërgimi i tiketave të konfirmuara në platformë
+│   ├── assistant.py       # "Pyet arkivin" (plani i kërkimit → burimet → përgjigje me burime)
 │   ├── db.py              # SQLite: mbledhjet, vendimet, detyrat, indeksi i kërkimit
 │   └── static/            # ndërfaqja (HTML, CSS, JS)
 ├── scripts/
 │   ├── transcribe.py      # transkriptimi me faster-whisper
 │   ├── diarize.py         # kush po flet (pyannote.audio)
 │   ├── extract.py         # përmbledhja, vendimet, detyrat me Claude
-│   └── evaluate_wer.py    # matja e saktësisë (WER)
+│   ├── evaluate_wer.py    # matja e saktësisë (WER)
+│   └── evaluate_dedup.py  # matja e kontrollit të dublikimeve (P/R/F1, pragu, konfigurimet)
 ├── data/
 │   ├── audio/             # regjistrimet e mbledhjeve
 │   ├── reference/         # transkriptet manuale (të sakta)
@@ -63,13 +72,42 @@ Pa SMTP të konfiguruar, kodi shfaqet në terminalin e serverit.
 | Roli | Kush | Çka mund të bëjë |
 |------|------|------------------|
 | Administrator | emailet te `ADMIN_EMAILS` ose të shënuar “Administrator” | gjithçka: ekipet, projektet, punonjësit, të gjitha mbledhjet, njoftimet |
-| Project manager | PM-ja i caktuar te projekti (një për projekt) | shton mbledhje në projektet e veta, cakton detyra, i dërgon në Jira; merr me email përmbledhjet dhe përkujtuesin ditor |
+| Project manager | PM-ja i caktuar te projekti (një për projekt) | shton mbledhje në projektet e veta, cakton detyra, konfirmon kontrollin e dublikimeve, i dërgon në Jira/Trello; merr me email përmbledhjet dhe përkujtuesin ditor |
 | Punonjës | të tjerët | sheh detyrat e veta dhe mbledhjet e projekteve ku është anëtar; shënon detyrat e veta si të kryera |
 
 - **Email (Gmail / Google Workspace)**: `SMTP_USER` + `SMTP_PASSWORD` (App password i Google).
   Pa to, asgjë s’dërgohet: emailet shihen te faqja “Njoftimet”.
-- **Jira Cloud**: `JIRA_BASE_URL`, `JIRA_EMAIL`, `JIRA_API_TOKEN`, dhe te çdo projekt “Çelësi në Jira”.
-  Butoni “Dërgo në Jira” te mbledhja krijon tiketat, të caktuara sipas emailit të punonjësit.
+- **Jira ose Trello**: te çdo projekt zgjidhet platforma (Jira me çelësin e projektit, p.sh. `PAY`,
+  ose Trello me kodin e tabelës nga `trello.com/b/<kodi>/…`). Secili PM e lidh llogarinë e vet te faqja
+  “Jira & Trello”; token-i ruhet i enkriptuar me `APP_SECRET`. Pa llogari të PM-së përdoren vlerat
+  `JIRA_*` / `TRELLO_*` në `.env`. Me `JIRA_MOCK=1` nuk thirret asnjë platformë: tiketat ruhen te
+  `data/tracker_mock.json` (aty mund të shtosh tiketa “të krijuara me dorë” për testim).
+
+### Kontrolli i dublikimeve dhe memoria e detyrave
+
+Pas analizës, çdo detyrë krahasohet me punën ekzistuese:
+
+1. **Kandidatët**: detyrat e hapura dhe të mbyllura së fundmi nga mbledhjet e mëparshme të projektit
+   dhe tiketat ekzistuese në Jira/Trello (të lexuara përmes API-së). Ngjashmëria llogaritet me
+   embeddings shumëgjuhëshe (`sentence-transformers`) dhe me fjalë kyçe / kode tiketash (`PAY-12`).
+2. **Vendimi**: modeli gjuhësor zgjedh *detyrë e re*, *dublikatë*, *përditësim* (afat/person i ri)
+   ose *rihapje* (tiketa ishte mbyllur).
+
+Asgjë nuk ndryshon në platformë pa konfirmimin e PM-së te karta “Existing work” në faqen e mbledhjes.
+Përditësimi ndryshon afatin/personin dhe shton koment me lidhjen te mbledhja; rihapja e kthen
+tiketën në status të hapur (Jira: tranzicioni i workflow-it; Trello: kartela kthehet nga lista “Done”).
+Çdo ndryshim ruhet në historikun e detyrës, dhe statusi sinkronizohet me platformën çdo `SYNC_MINUTES`.
+
+Për modelin e embeddings duhen rreth 0.5 GB; me `HF_HOME` mund ta vendosësh në një disk tjetër.
+
+Matja (kriteri 2 te 4.6), me anotimet në formatin e `data/eval/dedup_pairs.json`:
+
+```bash
+python scripts/evaluate_dedup.py data/eval/dedup_pairs.json
+```
+
+Del P/R/F1 për *vetëm fjalë kyçe*, *vetëm semantike* dhe *të dyja*, për çdo prag, veçmas për
+detyrat në të njëjtën gjuhë dhe në gjuhë të ndryshme, si dhe pragu më i mirë.
 
 Çelësat vendosen në `.env` (shih `.env.example`), pastaj rinise serverin:
 

@@ -1,10 +1,11 @@
 """
-AnchorzUp Meeting Agent — web app.
+Meeting Memory — web app.
 
 Run (from the project root, with the venv active):
     python -m app
 Then open http://127.0.0.1:8000
 """
+import importlib.util
 import json
 import mimetypes
 import os
@@ -22,7 +23,8 @@ from pydantic import BaseModel
 
 load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
-from . import assistant, auth, db, jira, learning, mailer, notify, org, pipeline, tickets as ticketing  # noqa: E402
+from . import (assistant, auth, db, dedup, jira, learning, mailer, memory, notify, org, pipeline,  # noqa: E402
+               tickets as ticketing, trackers)
 
 UPLOAD_DIR = db.ROOT / "data" / "uploads"
 STATIC_DIR = Path(__file__).resolve().parent / "static"
@@ -40,9 +42,12 @@ async def lifespan(_app):
     mailer.init()
     notify.init()
     learning.init()
+    trackers.init()
+    memory.init()
     UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
     pipeline.start_worker()
     notify.start_scheduler()
+    memory.start_sync()
     if not os.environ.get("APP_SECRET"):
         print("WARNING: set APP_SECRET in .env (a long random string).")
     if not auth.admin_emails():
@@ -50,7 +55,7 @@ async def lifespan(_app):
     yield
 
 
-app = FastAPI(title="AnchorzUp Meeting Agent", lifespan=lifespan)
+app = FastAPI(title="Meeting Memory", lifespan=lifespan)
 User = Depends(auth.current_user)
 
 
@@ -72,7 +77,7 @@ def auth_request(body: EmailIn):
     emp, code = auth.request_code(body.email)
     if emp:
         status = mailer.send(emp["email"], f"Your sign-in code: {code}",
-                             f"Hi {emp['full_name'].split()[0]},\n\nYour code for AnchorzUp Meeting Agent is: {code}\n\n"
+                             f"Hi {emp['full_name'].split()[0]},\n\nYour code for Meeting Memory is: {code}\n\n"
                              f"The code is valid for {auth.CODE_MINUTES} minutes. If you didn’t request it, ignore this email.",
                              kind="login")
         if status == "dry-run":
@@ -122,6 +127,8 @@ def status(user=User):
         "email": mailer.configured(),
         "jira": jira.configured(),
         "jira_mock": jira.mock(),
+        "trello": trackers.configured("trello"),
+        "embeddings": importlib.util.find_spec("sentence_transformers") is not None,
         "jira_default": jira._default_key() or None,  # used when a ticket/project has no Jira key
         "jira_url": os.environ.get("JIRA_BASE_URL", "").rstrip("/") if jira.configured() and not jira.mock() else None,
         "gpu": gpu,
@@ -342,10 +349,7 @@ class JiraIn(BaseModel):
 @app.post("/api/meetings/{meeting_id}/jira")
 def send_to_jira(meeting_id: int, body: JiraIn | None = None, user=User):
     auth.check_meeting(user, meeting_id, manage=True)
-    try:
-        return jira.push_meeting(meeting_id, body.task_ids if body else None)
-    except jira.JiraError as e:
-        raise HTTPException(400, str(e))
+    return jira.push_meeting(meeting_id, body.task_ids if body else None)
 
 
 @app.delete("/api/meetings/{meeting_id}")
@@ -464,6 +468,10 @@ def update_task(task_id: int, body: TaskUpdate, user=User):
         if body.status not in ("open", "done"):
             raise HTTPException(400, "The status must be 'open' or 'done'.")
         db.set_task_status(task_id, body.status)
+        if body.status != task["status"]:
+            with db.connect() as c:
+                memory.log(c, "done" if body.status == "done" else "reopened", task_id=task_id, key=task["jira_key"],
+                           old=task["status"], new=body.status, source="user", actor_id=user["id"])
     if body.set_assignee:
         try:
             org.set_task_assignee(task_id, body.assignee_id)
@@ -531,6 +539,12 @@ def ticket_from_tasks(body: FromTasks, user=User):
             raise HTTPException(400, "That is already a ticket.")
         if t["merged_into"] or t["is_ticket"]:
             raise HTTPException(409, f"“{t['description'][:80]}” is already part of a ticket.")
+        if t["dedup_state"] == "pending" and t["dedup_action"] not in (None, "new"):
+            raise HTTPException(409, f"“{t['description'][:80]}” may already exist as a ticket. "
+                                     "Confirm or correct the check under “Existing work” on the meeting page first.")
+        if t["dedup_state"] == "applied" and t["dedup_action"] != "new":
+            raise HTTPException(409, f"“{t['description'][:80]}” was linked to the existing ticket "
+                                     f"{t['linked_key'] or 'in memory'}; no new ticket is needed.")
     ticket_id, ai_used = ticketing.make_ticket(ids, body.ai)
     return {"ticket": db.get_task(ticket_id), "ai": ai_used}
 
@@ -562,10 +576,93 @@ def send_tickets(body: TicketsSend, user=User):
         t = db.get_task(tid)
         if not t or (allowed is not None and t["meeting_id"] not in allowed):
             raise HTTPException(404, "Ticket not found.")
+    return jira.push_tasks(ids, user["id"])
+
+
+# ---------- Duplicate check & task memory ----------
+
+@app.post("/api/meetings/{meeting_id}/dedup")
+def recheck_duplicates(meeting_id: int, user=User):
+    """Run the duplicate check again (e.g. after tickets were added on the platform)."""
+    m = auth.check_meeting(user, meeting_id, manage=True)
+    if m["status"] in BUSY:
+        raise HTTPException(409, "The meeting is being processed.")
+    return dedup.check_meeting(meeting_id)
+
+
+class DedupIn(BaseModel):
+    action: str | None = None     # override the AI: new | duplicate | update | reopen
+    candidate: int | None = None  # 1-based index into the task's candidates
+
+
+@app.post("/api/tasks/{task_id}/dedup")
+def apply_dedup(task_id: int, body: DedupIn, user=User):
+    """The PM confirms (or corrects) the duplicate-check decision; then it is carried out on Jira/Trello."""
+    t = db.get_task(task_id)
+    if not t:
+        raise HTTPException(404, "Task not found.")
+    auth.check_meeting(user, t["meeting_id"], manage=True)
     try:
-        return jira.push_tasks(ids, user["id"])
-    except jira.JiraError as e:
+        return memory.apply_action(task_id, body.action, body.candidate, actor_id=user["id"])
+    except memory.ActionError as e:
         raise HTTPException(400, str(e))
+    except trackers.TrackerError as e:
+        raise HTTPException(502, str(e))
+
+
+@app.get("/api/tasks/{task_id}/history")
+def task_history(task_id: int, user=User):
+    t = db.get_task(task_id)
+    if not t:
+        raise HTTPException(404, "Task not found.")
+    auth.check_meeting(user, t["meeting_id"])
+    key = t["jira_key"] or t["linked_key"]
+    events = memory.history(t["linked_task_id"] or task_id, key)
+    return {"task": t, "events": events}
+
+
+@app.post("/api/sync")
+def sync_now(user=User):
+    """Read ticket statuses from Jira/Trello now (it also runs every SYNC_MINUTES)."""
+    if not (user["is_admin"] or user["is_pm"]):
+        raise HTTPException(403, "Only PMs and administrators can sync.")
+    return memory.sync_statuses()
+
+
+# ---------- Jira / Trello connections (per PM, token stored encrypted) ----------
+
+class ConnectionIn(BaseModel):
+    username: str           # Jira: account email; Trello: API key
+    token: str
+    base_url: str | None = None  # Jira only
+
+
+def _require_manager(user):
+    if not (user["is_admin"] or user["is_pm"]):
+        raise HTTPException(403, "Only PMs and administrators connect Jira or Trello.")
+
+
+@app.get("/api/connections")
+def connections(user=User):
+    _require_manager(user)
+    return {"accounts": trackers.accounts_of(user["id"]), "mock": trackers.mock()}
+
+
+@app.put("/api/connections/{platform}")
+def save_connection(platform: str, body: ConnectionIn, user=User):
+    _require_manager(user)
+    try:
+        trackers.save_account(user["id"], platform, body.username, body.token, body.base_url)
+    except trackers.TrackerError as e:
+        raise HTTPException(400, str(e))
+    return {"accounts": trackers.accounts_of(user["id"])}
+
+
+@app.delete("/api/connections/{platform}")
+def delete_connection(platform: str, user=User):
+    _require_manager(user)
+    trackers.delete_account(user["id"], platform)
+    return {"accounts": trackers.accounts_of(user["id"])}
 
 
 @app.post("/api/meetings/{meeting_id}/approve")
@@ -598,6 +695,8 @@ class GroupIn(BaseModel):
     team_id: int | None = None   # projects only
     pm_id: int | None = None     # projects only
     jira_key: str | None = None  # projects only
+    tracker: str | None = None   # projects only: jira | trello
+    trello_board: str | None = None  # projects only
     member_ids: list[int] = []
 
 
