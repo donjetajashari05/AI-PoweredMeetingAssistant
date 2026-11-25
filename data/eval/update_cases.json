@@ -1,0 +1,54 @@
+[
+  {"task": {"description": "Rregullo problemin me hyrjen në sistem", "assignee": "Arta", "due_date": null,
+            "quote": "Arta, kqyre qat problem me login-in"},
+   "candidates": [{"key": "PAY-12", "title": "Fix login error", "status": "In Progress", "done": false, "assignee": "Arta", "due_date": null},
+                  {"key": "PAY-13", "title": "Add CSV export to the payroll report", "status": "To Do", "done": false, "assignee": "Blerim", "due_date": null}],
+   "expected": {"action": "duplicate", "key": "PAY-12"}},
+
+  {"task": {"description": "Fix the login error", "assignee": "Arta", "due_date": "2026-12-04",
+            "due_date_text": "deri të premten tjetër", "quote": "login-in e shtyjmë për të premten tjetër"},
+   "candidates": [{"key": "PAY-12", "title": "Fix login error", "status": "In Progress", "done": false, "assignee": "Arta", "due_date": "2026-11-27"}],
+   "expected": {"action": "update", "key": "PAY-12", "new_due_date": "2026-12-04"}},
+
+  {"task": {"description": "Export the payroll report as CSV", "assignee": "Driton", "due_date": null,
+            "quote": "eksportin në CSV po e merr Dritoni, Blerimi s'ka kohë"},
+   "candidates": [{"key": "PAY-13", "title": "Add CSV export to the payroll report", "status": "To Do", "done": false, "assignee": "Blerim", "due_date": null}],
+   "expected": {"action": "update", "key": "PAY-13", "new_assignee": "Driton"}},
+
+  {"task": {"description": "Fix the invoice API timeout again", "assignee": "Blerim", "due_date": null,
+            "quote": "timeout-i te invoice API po del prap, duhet me e rregullu"},
+   "candidates": [{"key": "PAY-14", "title": "Fix invoice API timeout", "status": "Done", "done": true, "assignee": "Blerim", "due_date": "2026-11-10"}],
+   "expected": {"action": "reopen", "key": "PAY-14"}},
+
+  {"task": {"description": "Write unit tests for the invoice API", "assignee": "Blerim", "due_date": null,
+            "quote": "duhet me shkru teste për invoice API"},
+   "candidates": [{"key": "PAY-14", "title": "Fix invoice API timeout", "status": "Done", "done": true, "assignee": "Blerim", "due_date": "2026-11-10"},
+                  {"key": "PAY-12", "title": "Fix login error", "status": "In Progress", "done": false, "assignee": "Arta", "due_date": null}],
+   "expected": {"action": "new", "key": null}},
+
+  {"task": {"description": "Shto mundësinë për ndryshimin e fjalëkalimit", "assignee": "Arta", "due_date": null,
+            "quote": "duhet me shtu reset password"},
+   "candidates": [{"key": "PAY-12", "title": "Fix login error", "status": "In Progress", "done": false, "assignee": "Arta", "due_date": null},
+                  {"key": "PAY-20", "title": "Add password reset", "status": "To Do", "done": false, "assignee": "Arta", "due_date": null}],
+   "expected": {"action": "duplicate", "key": "PAY-20"}},
+
+  {"task": {"description": "Përditëso faqen me çmimet e reja", "assignee": "Leutrim", "due_date": "2026-12-11",
+            "due_date_text": "javën që vjen", "quote": "çmimet në faqe i ndryshon Leutrimi javën që vjen"},
+   "candidates": [{"key": "WEB-3", "title": "Update pricing page", "status": "To Do", "done": false, "assignee": "Leutrim", "due_date": "2026-12-04"}],
+   "expected": {"action": "update", "key": "WEB-3", "new_due_date": "2026-12-11"}},
+
+  {"task": {"description": "Migrate the database to PostgreSQL 16", "assignee": "Driton", "due_date": null,
+            "quote": "migrimin e databazës në Postgres 16 e bën Dritoni"},
+   "candidates": [{"key": "OPS-7", "title": "Upgrade Node.js to version 22", "status": "To Do", "done": false, "assignee": "Driton", "due_date": null}],
+   "expected": {"action": "new", "key": null}},
+
+  {"task": {"description": "Rregullo PAY-15", "assignee": "Arta", "due_date": null,
+            "quote": "PAY-15 prapë s'po punon, duhet me e hap prap"},
+   "candidates": [{"key": "PAY-15", "title": "Payslip PDF shows wrong totals", "status": "Done", "done": true, "assignee": "Arta", "due_date": null}],
+   "expected": {"action": "reopen", "key": "PAY-15"}},
+
+  {"task": {"description": "Design the new dashboard layout", "assignee": "Leutrim", "due_date": null,
+            "quote": "dizajnin e dashboard-it të ri"},
+   "candidates": [{"key": "WEB-3", "title": "Update pricing page", "status": "To Do", "done": false, "assignee": "Leutrim", "due_date": "2026-12-04"}],
+   "expected": {"action": "new", "key": null}}
+]

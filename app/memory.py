@@ -1,5 +1,5 @@
 """
-Long-term project memory (thesis 4.5).
+Long-term project memory (literature review: long-term memory).
 
 1) Structured memory of tasks: every change of a task (created on the platform, mentioned
    again, deadline moved, person changed, done, reopened, blocked) is one row in
@@ -260,7 +260,11 @@ def task_sources(keywords, meeting_ids=None, limit=6):
     with db.connect() as c:
         rows = db.rows(c.execute(db.TASK_SELECT + " WHERE t.merged_into IS NULL" + only
                                  + " ORDER BY m.meeting_date DESC LIMIT 1000", tuple(meeting_ids or ())))
-    scored = sorted(((keyword_score(query, r["description"] + " " + (r["jira_key"] or "")), r) for r in rows),
+    texts = [r["description"] + " " + (r["jira_key"] or "") for r in rows]
+    # Words (incl. ticket codes) or meaning: the question may be English and the task Albanian
+    from .dedup import semantic_scores
+    sem = semantic_scores(keywords[0], texts) if rows else []
+    scored = sorted(((max(keyword_score(query, t), s - 0.16), r) for t, s, r in zip(texts, sem, rows)),
                     key=lambda x: -x[0])
     out = []
     for s, r in scored[:limit]:

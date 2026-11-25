@@ -11,6 +11,7 @@ Examples:
 """
 import argparse
 import json
+import os
 import sys
 import time
 from functools import lru_cache
@@ -23,6 +24,19 @@ from faster_whisper import WhisperModel
 load_dotenv()
 
 SPEAKER_LABEL = "Folësi"
+UNCLEAR_LOGPROB = -1.0  # Whisper's own threshold for "not sure, try again"
+UNCLEAR_REPEAT = 2.4    # text this repetitive ("dhe dhe dhe…") is a loop, not speech
+
+# Whisper fine-tuned on Albanian (LoRA on large-v3-turbo, converted to CTranslate2), unzipped into
+# models/ (never in git). On Gheg spontaneous speech it made 49.1% WER against 81.2% for the base
+# large-v3-turbo (scripts/asr_benchmark.py, 60 clips, 3 speakers). Chosen like any other model once
+# its folder has model.bin.
+LOCAL_MODELS = {"albanian-tuned": Path(__file__).resolve().parent.parent / "models" / "whisper-turbo-sq-ct2"}
+
+
+def local_models():
+    """The local model names whose files are in place."""
+    return [n for n, p in LOCAL_MODELS.items() if (p / "model.bin").exists()]
 
 
 def get_device():
@@ -36,7 +50,11 @@ def get_device():
 def load_model(name):
     """Load a Whisper model once and reuse it (loading takes several seconds)."""
     device, compute_type = get_device()
-    return WhisperModel(name, device=device, compute_type=compute_type)
+    # On laptop CPUs with fast and slow cores (Intel 12th gen and later), more threads is SLOWER:
+    # the fast cores wait for the slow ones. WHISPER_THREADS in .env overrides it.
+    threads = int(os.environ.get("WHISPER_THREADS") or min(4, os.cpu_count() or 4)) if device == "cpu" else 0
+    path = str(LOCAL_MODELS[name]) if name in LOCAL_MODELS else name
+    return WhisperModel(path, device=device, compute_type=compute_type, cpu_threads=threads)
 
 
 def transcribe_audio(audio, model_name="large-v3", language=None, diarize=False,
@@ -70,12 +88,23 @@ def transcribe_audio(audio, model_name="large-v3", language=None, diarize=False,
         initial_prompt=initial_prompt,
         hotwords=hotwords,
         word_timestamps=diarize,  # word-level times are needed to match speakers
+        # Each 30-second window starts fresh instead of from the previous window's text, so one
+        # garbled window can't drag the rest into loops ("dhe dhe dhe…").
+        condition_on_previous_text=False,
+        repetition_penalty=1.1,
+        no_repeat_ngram_size=3,
     )
     if on_info:
         on_info(info)
 
     results, words = [], []
+    speech, unclear = 0.0, 0.0
     for seg in segments:  # transcription actually happens while iterating
+        # Whisper's own signs that it was guessing: low confidence, or the same words over and over
+        length = max(seg.end - seg.start, 0.0)
+        speech += length
+        if seg.avg_logprob < UNCLEAR_LOGPROB or seg.compression_ratio > UNCLEAR_REPEAT:
+            unclear += length
         item = {"start": round(seg.start, 2), "end": round(seg.end, 2), "text": seg.text.strip()}
         results.append(item)
         for w in seg.words or []:
@@ -108,6 +137,9 @@ def transcribe_audio(audio, model_name="large-v3", language=None, diarize=False,
         "duration_sec": round(info.duration, 1),
         "processing_sec": round(time.time() - start, 1),
         "asr_sec": round(asr_elapsed, 1),
+        # Share of the speech Whisper could not make out (0-1): a high value means the recording
+        # itself was the problem (distance, noise, people talking at once)
+        "unclear_share": round(unclear / speech, 2) if speech else None,
         "segments": results,
     }
     if utterances is not None:
@@ -121,7 +153,7 @@ def main():
     sys.stdout.reconfigure(encoding="utf-8")  # so ë/ç print correctly in the Windows console
     parser = argparse.ArgumentParser(description="Meeting transcription")
     parser.add_argument("audio", help="Path to the audio file (mp3, wav, m4a...)")
-    parser.add_argument("--model", default="large-v3", help="tiny, base, small, medium, large-v3, large-v3-turbo")
+    parser.add_argument("--model", default="large-v3", help="tiny, base, small, medium, large-v3, large-v3-turbo, albanian-tuned")
     parser.add_argument("--language", default=None, help="Language code (e.g. en), or leave empty for auto-detection")
     parser.add_argument("--out", default="output", help="Directory where results are saved")
     parser.add_argument("--diarize", action="store_true", help="Detect who is speaking (pyannote.audio)")

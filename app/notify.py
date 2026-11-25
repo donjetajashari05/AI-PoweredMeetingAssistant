@@ -79,24 +79,37 @@ def send_daily_reminders(today=None):
                        m.title AS meeting, p.name AS project, t.jira_key
                 FROM tasks t JOIN meetings m ON m.id = t.meeting_id JOIN projects p ON p.id = m.project_id
                 LEFT JOIN employees e ON e.id = t.assignee_id
-                WHERE p.pm_id = ? AND t.status = 'open' AND t.merged_from IS NULL AND t.due_date IS NOT NULL AND t.due_date <= ?
+                WHERE p.pm_id = ? AND t.status = 'open' AND t.merged_from IS NULL AND t.merged_into IS NULL
+                  AND ((t.due_date IS NOT NULL AND t.due_date <= ?)
+                       OR t.due_date IS NULL OR COALESCE(e.full_name, t.assignee) IS NULL)
                 ORDER BY t.due_date
             """, (pm["id"], tomorrow)))
             c.execute("INSERT OR IGNORE INTO reminder_log (pm_id, sent_on) VALUES (?, ?)", (pm["id"], today.isoformat()))
             if tasks:
                 digests.append((pm, tasks))
 
-    fmt = lambda t: (f"• {t['description']} — {t['who'] or 'unassigned'} ({t['project']}, due {t['due_date']})"
+    fmt = lambda t: (f"• {t['description']} — {t['who'] or 'unassigned'} ({t['project']}, due {t['due_date'] or '-'})"
                      + (f" [{t['jira_key']}]" if t["jira_key"] else ""))
     for pm, tasks in digests:
-        late = [t for t in tasks if t["due_date"] < today.isoformat()]
-        soon = [t for t in tasks if t["due_date"] >= today.isoformat()]
+        dated = [t for t in tasks if t["due_date"] and t["due_date"] <= tomorrow]
+        late = [t for t in dated if t["due_date"] < today.isoformat()]
+        soon = [t for t in dated if t["due_date"] >= today.isoformat()]
+        # Work that came out of a meeting without a person or a deadline is easily forgotten:
+        # the PM is reminded every day until both are set.
+        no_owner = [t for t in tasks if not t["who"]]
+        no_date = [t for t in tasks if t["who"] and not t["due_date"]]
         parts = [f"Hi {pm['full_name'].split()[0]},"]
         if late:
             parts.append(f"LATE ({len(late)})\n" + "\n".join(map(fmt, late)))
         if soon:
             parts.append(f"DUE TODAY OR TOMORROW ({len(soon)})\n" + "\n".join(map(fmt, soon)))
-        subject = (f"Reminder: {len(late)} late task(s)" if late else f"Reminder: {len(soon)} task(s) due soon")
+        if no_owner:
+            parts.append(f"NOBODY IS RESPONSIBLE ({len(no_owner)})\n" + "\n".join(map(fmt, no_owner)))
+        if no_date:
+            parts.append(f"NO DEADLINE ({len(no_date)})\n" + "\n".join(map(fmt, no_date)))
+        subject = (f"Reminder: {len(late)} late task(s)" if late
+                   else f"Reminder: {len(soon)} task(s) due soon" if soon
+                   else f"Reminder: {len(no_owner) + len(no_date)} task(s) need a person or a deadline")
         mailer.send(pm["email"], subject, "\n\n".join(parts), kind="reminder",
                     link=f"{mailer.app_url()}/#/tasks", link_text="View tasks")
     return len(digests)

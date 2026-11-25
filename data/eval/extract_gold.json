@@ -1,0 +1,10 @@
+[
+  {"transcript": "data/samples/mbledhja_shembull.json",
+   "date": "2026-11-23",
+   "pred": "output/mbledhja_shembull_notes.json",
+   "decisions": ["Reduce the marketing budget for next quarter by 10%"],
+   "tasks": [
+     {"description": "Prepare the final budget report", "assignee": "Arta", "due_date": "2026-11-27"},
+     {"description": "Update the website with the new prices", "assignee": "Folësi 3", "due_date": "2026-12-04"}
+   ]}
+]

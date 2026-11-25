@@ -1,5 +1,5 @@
 """
-Evaluate level 1 of the duplicate check (thesis 4.6, criterion 2).
+Evaluate level 1 of the duplicate check (evaluation criterion 2: duplicates avoided).
 
 Input: a JSON list of annotated tasks, e.g. data/eval/dedup_pairs.json:
   [

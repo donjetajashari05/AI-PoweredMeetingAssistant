@@ -31,6 +31,12 @@ STATIC_DIR = Path(__file__).resolve().parent / "static"
 AUDIO_EXT = {".mp3", ".wav", ".m4a", ".webm", ".ogg", ".mp4", ".flac", ".aac"}
 MAX_UPLOAD = 1024 * 1024 * 1024  # 1 GB
 MODELS = ["tiny", "base", "small", "medium", "large-v3-turbo", "large-v3"]
+
+
+def models():
+    """The Whisper models, plus the Albanian fine-tuned one once its files are in models/."""
+    import transcribe as transcriber  # scripts/transcribe.py
+    return MODELS + transcriber.local_models()
 BUSY = ("queued", "transcribing", "diarizing", "extracting")
 
 
@@ -105,7 +111,7 @@ def status(user=User):
         "jira_default": jira._default_key() or None,  # used when a ticket/project has no Jira key
         "jira_url": os.environ.get("JIRA_BASE_URL", "").rstrip("/") if jira.configured() and not jira.mock() else None,
         "gpu": gpu,
-        "models": MODELS,
+        "models": models(),
         "default_model": os.environ.get("WHISPER_MODEL") or "large-v3",  # most accurate for Albanian
         "today": date.today().isoformat(),
     }
@@ -139,7 +145,7 @@ async def create_meeting(
     ext = Path(file.filename or "").suffix.lower()
     if ext not in AUDIO_EXT | {".json"}:
         raise HTTPException(400, "Unknown format. Use mp3, wav, m4a, webm, ogg, mp4, flac or json.")
-    if model not in MODELS:
+    if model not in models():
         raise HTTPException(400, "Model i panjohur.")
     try:
         mdate = date.fromisoformat(meeting_date) if meeting_date else date.today()

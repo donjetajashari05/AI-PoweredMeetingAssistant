@@ -23,7 +23,10 @@ meeting-assistant/
 │   ├── diarize.py         # kush po flet (pyannote.audio)
 │   ├── extract.py         # përmbledhja, vendimet, detyrat me Claude
 │   ├── evaluate_wer.py    # matja e saktësisë (WER)
-│   └── evaluate_dedup.py  # matja e kontrollit të dublikimeve (P/R/F1, pragu, konfigurimet)
+│   ├── evaluate_dedup.py      # dublikimet, niveli 1: kandidatët (P/R/F1, pragu, konfigurimet)
+│   ├── evaluate_extract.py    # kriteri 1: saktësia e nxjerrjes së detyrave dhe vendimeve
+│   ├── evaluate_update.py     # kriteri 2 dhe 3: e re / dublikatë / përditësim / rihapje
+│   └── evaluate_retrieval.py  # kriteri 4: gjetja e informacionit nga mbledhjet e kaluara
 ├── data/
 │   ├── audio/             # regjistrimet e mbledhjeve
 │   ├── reference/         # transkriptet manuale (të sakta)
@@ -97,9 +100,9 @@ Përditësimi ndryshon afatin/personin dhe shton koment me lidhjen te mbledhja; 
 tiketën në status të hapur (Jira: tranzicioni i workflow-it; Trello: kartela kthehet nga lista “Done”).
 Çdo ndryshim ruhet në historikun e detyrës, dhe statusi sinkronizohet me platformën çdo `SYNC_MINUTES`.
 
-Për modelin e embeddings duhen rreth 0.5 GB; me `HF_HOME` mund ta vendosësh në një disk tjetër.
+Për modelin e embeddings (paraphrase-multilingual-mpnet-base-v2) duhen rreth 1.1 GB; me `HF_HOME` mund ta vendosësh në një disk tjetër.
 
-Matja (kriteri 2 te 4.6), me anotimet në formatin e `data/eval/dedup_pairs.json`:
+Matja (kriteri 2 i vlerësimit), me anotimet në formatin e `data/eval/dedup_pairs.json`:
 
 ```bash
 python scripts/evaluate_dedup.py data/eval/dedup_pairs.json
@@ -107,6 +110,73 @@ python scripts/evaluate_dedup.py data/eval/dedup_pairs.json
 
 Del P/R/F1 për *vetëm fjalë kyçe*, *vetëm semantike* dhe *të dyja*, për çdo prag, veçmas për
 detyrat në të njëjtën gjuhë dhe në gjuhë të ndryshme, si dhe pragu më i mirë.
+
+## Modeli Whisper i trajnuar për shqip
+
+Përveç modeleve standarde, aplikacioni mund ta përdorë modelin `albanian-tuned`: Whisper large-v3-turbo
+i trajnuar me LoRA në të folur shqip dhe i konvertuar për faster-whisper. Shpaketoje `whisper-turbo-sq-ct2.zip`
+në `models/whisper-turbo-sq-ct2/` (duhet të ketë `model.bin`). Pas rinisjes së serverit modeli del te
+“Transcription model”. Dosja `models/` nuk shkon në git, sepse është e madhe.
+
+Matja me `scripts/asr_benchmark.py`, në të folur spontan gegë (Common Voice Spontaneous Speech, 60 klipe, 3 folës):
+
+| Modeli | WER | WER pa ë/ç | CER |
+|--------|-----|-----------|-----|
+| large-v3-turbo | 81.2% | 79.6% | 40.4% |
+| albanian-tuned | 49.1% | 48.4% | 21.5% |
+
+```bash
+python scripts/asr_benchmark.py --model large-v3-turbo --set gheg --limit 60
+python scripts/asr_benchmark.py --model models/whisper-turbo-sq-ct2 --set gheg --limit 60
+python scripts/asr_benchmark.py --summary
+python scripts/compare_models.py data/audio/mbledhja1.mp3 --a large-v3-turbo --b models/whisper-turbo-sq-ct2
+```
+
+Setet e testimit shkarkohen në `data/asr_test/` (shih fillimin e `asr_benchmark.py`). `compare_models.py`
+i nxjerr vetëm vendet ku dy modelet nuk pajtohen, që të dëgjohen dhe të vlerësohen me dorë.
+Për çdo transkript ruhet edhe `unclear_share`: pjesa e të folurit ku Whisper ishte i pasigurt.
+
+### Detyrat pa person përgjegjës ose pa afat
+
+Përkujtuesi ditor që i dërgohet PM-së (nga `REMINDER_HOUR`) përmban detyrat me vonesë dhe ato me afat
+sot ose nesër. Përveç tyre i liston edhe detyrat e hapura pa person përgjegjës ose pa afat, çdo ditë,
+derisa të caktohen.
+
+## Vlerësimi
+
+Sistemi vlerësohet sipas katër kritereve të Deklarimit të Problemit. Secili ka skriptin dhe
+skedarin me anotime manuale në `data/eval/` (shembujt aty janë të vegjël: zgjeroji me mbledhjet tua).
+
+| Kriteri | Skripti | Anotimet | Çka mat |
+|---------|---------|----------|---------|
+| 1. Nxjerrja e detyrave dhe vendimeve | `evaluate_extract.py` | `extract_gold.json` | P/R/F1 për detyrat dhe vendimet; sa herë janë të sakta personi përgjegjës dhe afati |
+| 2. Dublikimet e shmangura | `evaluate_dedup.py`, `evaluate_update.py` | `dedup_pairs.json`, `update_cases.json` | sa detyra ekzistuese u lidhën me tiketën e duhur në vend që të krijohej një e re; sa detyra të reja u lidhën gabimisht |
+| 3. Përditësimi i detyrave ekzistuese | `evaluate_update.py` | `update_cases.json` | saktësia e vendimit e re/dublikatë/përditësim/rihapje (matrica e konfuzionit) dhe a ndryshohen afati e personi saktë |
+| 4. Gjetja e informacionit nga mbledhjet e kaluara | `evaluate_retrieval.py` | `retrieval_questions.json` | Hit@k, Recall@k dhe MRR për BM25, kërkimin semantik, hibridin dhe planin me AI; me `--answer`, sa fakte të pritura i përmban përgjigjja |
+
+```bash
+python scripts/evaluate_extract.py data/eval/extract_gold.json --run     # nxjerr me AI dhe krahason
+python scripts/evaluate_update.py data/eval/update_cases.json            # me modelin gjuhësor
+python scripts/evaluate_update.py data/eval/update_cases.json --rule     # krahasimi: vetëm rregulli i thjeshtë
+python scripts/evaluate_retrieval.py data/eval/retrieval_questions.json --answer
+```
+
+- Te `evaluate_extract.py` detyrat çiftohen sipas kuptimit, me të njëjtën ngjashmëri shumëgjuhëshe
+  si kontrolli i dublikimeve, prandaj "Update website prices" numërohet si "Update the website with the new prices".
+- **Ndikimi i gabimeve të transkriptimit te detyrat:** te `evaluate_extract.py`, `"transcript"` mund të jetë
+  një listë me disa transkripte të së njëjtës mbledhje, p.sh. `{"manual": "data/reference/mbledhja1.txt",
+  "large-v3-turbo": "...json", "albanian-tuned": "...json"}`. Secili vlerësohet me të njëjtat anotime, kështu
+  që dallimi nga `manual` (pa gabime njohjeje) te secili model tregon sa e dëmtojnë gabimet nxjerrjen e detyrave.
+- `evaluate_update.py` i kalon detyrat nëpër të dy nivelet si në aplikacion. Me `--rule` merret rezultati
+  pa modelin gjuhësor, për krahasim.
+- `evaluate_retrieval.py` përdor mbledhjet e ruajtura në aplikacion: mbledhjet te `"meetings"` shkruhen me
+  titull ose id. Krahasohen: *bm25* (fjalët e pyetjes), *semantic* (embeddings shumëgjuhëshe, si DPR),
+  *hybrid* (të dyja të bashkuara me Reciprocal Rank Fusion) dhe *plan* (hibridi + fjalë kyçe shqip/anglisht
+  nga modeli + statusi i detyrave nga memoria). Pyetjet në anglisht mbi mbledhje në shqip dështojnë te
+  *bm25* dhe gjenden te *semantic*/*hybrid*. Aplikacioni përdor `RETRIEVAL_MODE` (parazgjedhur `hybrid`).
+- **Kujdes me pragjet:** `DEDUP_THRESHOLD` dhe `DEDUP_RULE_THRESHOLD` (0.65) janë kalibruar me shembujt e
+  vegjël në `data/eval/`. Rezultatet mbi po të njëjtët shembuj nuk janë rezultate të vlefshme për temë:
+  pragjet caktohen në një pjesë të anotimeve reale dhe raportohen në pjesën tjetër.
 
 Çelësat vendosen në `.env` (shih `.env.example`), pastaj rinise serverin:
 

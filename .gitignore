@@ -9,3 +9,6 @@ data/app.db*
 data/uploads/
 data/jira_mock.jsonl
 data/tracker_mock.json
+# Fine-tuned speech model and ASR test sets (large files)
+models/
+data/asr_test/

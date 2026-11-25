@@ -1,5 +1,5 @@
 """
-Duplicate check for new tasks, in two levels (thesis 4.4).
+Duplicate check for new tasks, in two levels (literature review: semantic similarity and duplicates).
 
 Level 1 - candidates: existing work that might be the same task.
   Sources: (a) the system's memory: open and recently closed tasks/tickets from earlier
@@ -18,8 +18,9 @@ Level 2 - decision: the language model gets the task, its quote and the candidat
 Nothing is changed on the platform here: the decision waits for the PM (see memory.apply_action).
 
 .env:
-  EMBEDDING_MODEL   default sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2
-  DEDUP_MODE        both | semantic | keyword   (for the experiments in 4.6)
+  EMBEDDING_MODEL   default sentence-transformers/paraphrase-multilingual-mpnet-base-v2
+                    (MiniLM-L12 gave only 0.31 for "rregullo problemin me hyrjen" ~ "Fix login error"; mpnet 0.66)
+  DEDUP_MODE        both | semantic | keyword   (for the evaluation)
   DEDUP_THRESHOLD   minimum score of a candidate (default 0.55 with embeddings, 0.35 without)
 """
 import json
@@ -43,7 +44,7 @@ if str(db.ROOT / "scripts") not in sys.path:
 
 import llm  # noqa: E402  (scripts/llm.py)
 
-DEFAULT_MODEL = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+DEFAULT_MODEL = "sentence-transformers/paraphrase-multilingual-mpnet-base-v2"
 MAX_CANDIDATES = 5
 MEMORY_DAYS = 90  # closed work older than this is not a candidate any more
 TICKET_KEY = re.compile(r"\b([A-Z][A-Z0-9_]{1,9}-\d+)\b")
@@ -260,9 +261,20 @@ def _block(i, t, cands):
     return "\n".join(lines)
 
 
+def rule_threshold():
+    """Score from which the rule (no language model) links a task to existing work.
+    With mpnet, same work scored 0.66-0.85 and different work at most 0.59 on the calibration pairs
+    (the thesis example "rregullo problemin me hyrjen në sistem" ~ "Fix login error" is 0.66).
+    Re-tune DEDUP_RULE_THRESHOLD on real annotated meetings."""
+    try:
+        return float(os.environ["DEDUP_RULE_THRESHOLD"])
+    except (KeyError, ValueError):
+        return 0.65 if has_embeddings() else 0.75
+
+
 def rule_verdict(task, cands):
     """Without an AI key: the best candidate above a high score decides."""
-    if not cands or cands[0]["score"] < max(threshold() + 0.2, 0.75):
+    if not cands or cands[0]["score"] < rule_threshold():
         return {"action": "new", "candidate": None, "reason": "No existing ticket is similar enough."}
     c = cands[0]
     if c["done"]:

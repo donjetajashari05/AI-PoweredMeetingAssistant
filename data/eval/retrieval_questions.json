@@ -1,0 +1,6 @@
+[
+  {"question": "Çfarë u vendos për buxhetin e marketingut?", "meetings": ["Mbledhja shembull"], "facts": ["10"]},
+  {"question": "Kush e përgatit raportin final të buxhetit dhe deri kur?", "meetings": ["Mbledhja shembull"], "facts": ["Arta"]},
+  {"question": "Who is updating the website prices?", "meetings": ["Mbledhja shembull"], "facts": ["price"]},
+  {"question": "A u vendos diçka për ofruesin e hostimit?", "meetings": ["Mbledhja shembull"], "facts": ["host"]}
+]
